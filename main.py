@@ -9,8 +9,8 @@ CORS(app)
 a='Cxv24KPcpogXnqgpDAXFerewrf'
 app.config['JWT_SECRET_KEY'] = 'Cxv24KPcpogXnqgpDAXF'
 jwt = JWTManager(app)
-client = MongoClient('mongodb://mongo:POsHMuKHBuIzgPQKaaZBMKdTJJheHjJv@junction.proxy.rlwy.net:38928')
-db = client['Sancarmen']
+client = MongoClient('mongodb+srv://atonikapp:YY0Gh4ydpa1TPju3@cluster0.ln4xz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
+db = client['SanCamen']
 usuarios_collection = db['usuarios']
 equipos_collection = db['equipos']
 areas_collection = db['areas']
@@ -35,7 +35,7 @@ def login():
     data = request.get_json()
     user = usuarios_collection.find_one({"usuario": data['usuario'], "contrasena": data['contrasena'] ,"tipousuario": data["tipousuario"]})
     if user:
-        return jsonify({"access_token": create_access_token(identity={"id": str(user['_id']), "tipo": user["tipousuario"]})}), 200
+        return jsonify({"access_token": create_access_token(identity={"id": str(user['_id']), "tipo": user["tipousuario"],"hospital":user['hospital']})}), 200
     else:
         return jsonify({"msg": "Usuario o contraseña incorrectos"}), 401
     
@@ -279,11 +279,10 @@ def create_responsableArea():
 
     responsableArea_data = {
         "codigo": generateCode(6),
-        "fechaExpiracion": data['fechaExpiracion'],
-        "fechaCreacion": data['fechaCreacion'],
         "hospital": hospital_user['nombre'],
         "nombre": data['nombre'],
         "estado": data['estado'],
+        "area": data['area'],
         "documento": data['documento'],
         "firma": "",
         "idManteniminetos": [],
