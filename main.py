@@ -9,23 +9,20 @@ CORS(app)
 a='Cxv24KPcpogXnqgpDAXFerewrf'
 app.config['JWT_SECRET_KEY'] = 'Cxv24KPcpogXnqgpDAXF'
 jwt = JWTManager(app)
-client = MongoClient('mongodb+srv://atonikapp:YY0Gh4ydpa1TPju3@cluster0.ln4xz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
+client = MongoClient('mongodb+srv://atonikapp:wal1YKbRdSl0PirU@cluster0.ln4xz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
 db = client['SanCamen']
 usuarios_collection = db['usuarios']
 equipos_collection = db['equipos']
+tipos_collection = db['tipos']
 areas_collection = db['areas']
 rutinas_collection = db['rutinas']
-
 
 ######  Funtionality ######
 def generateCode(num):
     codigo = ''.join(random.choices(string.ascii_uppercase + string.digits,k=num))
     return codigo
 
-###############################
-
-
-##################### users ############################
+###############################/##################### users ############################
 @app.route('/login', methods=['POST'])
 def login():
     """
@@ -142,12 +139,7 @@ def create_tecnico():
     usuarios_collection.insert_one(tecnico_data)
     return jsonify({"msg": "Técnico creado exitosamente"}), 201
 
-
-
-
-
 @app.route('/profesional', methods=['POST'])
-@jwt_required()
 def create_profesional():
     """
     Ruta para crear un usuario Profesional.
@@ -156,7 +148,8 @@ def create_profesional():
 
     data = request.get_json()
     existing_user = usuarios_collection.find_one({"documento": data['documento']})
-    
+    hospital = usuarios_collection.find_one({"tipo":"hospital"})
+    code = hospital["codigoIdentificacion"] + "-" + generateCode(6)
     if existing_user:
         return jsonify({"msg": "Ya existe un usuario con ese documento"}), 400
     
@@ -164,17 +157,32 @@ def create_profesional():
     if not hospital_user:
         return jsonify({"msg": "No se encontró el hospital"}), 404
     profesional_data = {
-        "codigo": generateCode(6),
+        "codigo": code,
         "nombre": data['nombre'],
         "documento": data['documento'],
         "estado": data['estado'],
-        "hospital": data['hospital'],
+        "hospital": hospital['nombre'],
         "fechaCreacion": data['fechaCreacion'],
         "fechaExpiracion": data['fechaExpiracion'],
         "tipo": data['profesional'],
     }
     usuarios_collection.insert_one(profesional_data)
     return jsonify({"msg": "Profesional creado exitosamente"}), 201
+
+
+@app.route('/getprofesionales', methods=['GET'])
+def get_profesionales():
+    """
+    Ruta para obtener todos los profesionales.
+    """
+    profesionales = usuarios_collection.find({"tipo": "profesional"})
+    result = []
+    
+    for profesional in profesionales:
+        profesional['_id'] = str(profesional['_id'])
+        result.append(profesional)
+    
+    return jsonify(result), 200
 
 
 @app.route('/encargado', methods=['POST'])
@@ -210,7 +218,6 @@ def create_encargado():
     return jsonify({"msg": "Encargado creado exitosamente"}), 201
 
 @app.route('/hospital', methods=['POST'])
-@jwt_required()
 def create_hospital():
     """
     Ruta para crear un usuario Encargado.
@@ -400,26 +407,29 @@ def update_exp():
 ############### Areas #######################
 
 @app.route('/area', methods=['POST'])
-@jwt_required()
 def create_area():
+    data = request.get_json()
     hospital = usuarios_collection.find_one({"tipo":"hospital"})
     codearea = hospital["codigoIdentificacion"] + "-" + generateCode(4)
-    data = request.get_json()
-    Area = {
-        "codigoIdentificacion": codearea,
-        "hospital": hospital['nombre'],
-        "nombre": data['nombre'],
-        "idEquipos": [],
-        "respondableArea":data["responsableArea"],
-        "documentoResponsableArea":data["documentoResponsableArea"]
-    }
-    areas_collection.insert_one(Area)
+    area = areas_collection.find_one({"nombre": data['nombre']})
+    if area is not None:
+        return jsonify({"msg": "Ya existe un área con ese nombre"}), 206
+    else:
+        Area = {
+            "codigoIdentificacion": codearea,
+            "hospital": hospital['nombre'],
+            "nombre": data['nombre'],
+            "idEquipos": [],
+            "responsableArea":data["responsableArea"],
+            "documentoResponsableArea":data["documentoResponsableArea"],
+        }
+        areas_collection.insert_one(Area)
+    return jsonify({"msg": "Area creada"}), 201
 
-@app.route('/areas', methods=['GET'])
-@jwt_required()
+@app.route('/getareas', methods=['GET'])
 def get_all_areas():
     """
-    Ruta para obtener todas las áreas.
+    Ruta para obtener todas las áreas.1
     """
     areas = areas_collection.find()  # Fetch all areas from the collection
     result = []
@@ -430,18 +440,80 @@ def get_all_areas():
     
     return jsonify(result), 200
 
+@app.route('/createtipo', methods=['POST'])
+def createtipo():
+    data = request.get_json()
+    tipo = tipos_collection.find_one({"tipo": data['tipo']})
+    if tipo is not None:
+        marca = tipos_collection.find_one({"marca": data['marca']})
+        if marca is not None:
+            modelo = tipos_collection.find_one({"modelo": data['modelo']})
+            if modelo is not None:
+                return jsonify({"msg": "Ya existe un tipo de equipo con iguales caracteristicas"}), 206
+    else:
+        Tipo = {
+            "tipo": data['tipo'],
+            "marca": data['marca'],
+            "modelo": data['modelo'],
+            "preguntas": []
+        }
+        tipos_collection.insert_one(Tipo)        
+    return jsonify({"msg": "Tipo creado"}), 201
+
+
+@app.route('/getmarcas/<tipo>', methods=['GET'])
+def getmarcas(tipo):
+    """
+    Ruta para obtener todos los tipos de equipos.
+    """
+    coincidentes = tipos_collection.find({"tipo": tipo}, {"marca": 1, "_id": 0})
+    result = []
+    if coincidentes is None:
+        return jsonify({"msg": "No se encontraron marcas para este tipo"}), 404
+    else:
+        for marca in coincidentes:
+            if marca['marca'] not in result:
+                result.append(marca['marca'])
+        return jsonify(result), 200
+
+
+@app.route('/gettipos', methods=['GET'])
+def get_tipos():
+    """
+    Ruta para obtener todos los tipos de equipos.
+    """
+    tipos = tipos_collection.find()  # Fetch all areas from the collection
+    result = []
+    for tipo in tipos:
+        tipo = tipo['tipo']
+        if tipo not in result:
+            result.append(tipo)
+    return jsonify(result), 200
+
+@app.route('/getmodelos/<tipo>/<marca>', methods=['GET'])
+def get_modelos(tipo, marca):
+    """
+    Ruta para obtener todos los tipos de equipos.
+    """
+    modeloscoincidentes = tipos_collection.find({"tipo": tipo, "marca": marca}, {"modelo": 1, "_id": 0})
+    result = []
+    for modelo in modeloscoincidentes:
+        modelo = modelo['modelo']
+        if modelo not in result:
+            result.append(modelo)
+    return jsonify(result), 200
+
 
 @app.route('/getarea/<codigo>', methods=['GET'])
-@jwt_required()
-def get_area():
-    data = request.get_json()
-    area = areas_collection.find_one({"codigoIdentificacion": data['codigo']})
+def get_area(codigo):
+    area = areas_collection.find_one({"codigoIdentificacion":codigo})
     if not area:
         return jsonify({"error": "Área no encontrada"}), 404
-    return jsonify(area), 200
+    else:
+        area['_id'] = str(area['_id'])
+        return jsonify(area), 200
 
-
-@app.route('/area/<codigo>', methods=['PUT'])
+""" @app.route('/area/<codigo>', methods=['PUT'])
 @jwt_required()
 def update_responsable_area(codigo):
 
@@ -468,17 +540,8 @@ def update_responsable_area(codigo):
 
     return jsonify({"message": "Responsable de área actualizado correctamente"}), 200
 
-
+ """
 ############### Areas Final #######################
-
-
-
-
-
-
-
-
-
 
 ############### Equipos #######################
 @app.route('/equipo/<codigoIdentificacion>', methods=['GET'])
@@ -491,46 +554,48 @@ def get_equipo(codigoIdentificacion):
         return jsonify({"error": "Equipo no encontrado"}), 404
 
 @app.route('/equipo', methods=['POST'])
-@jwt_required()
 def equipo():
-    hospital = usuarios_collection.find_one({"tipo":"hospital"})
-    area = usuarios_collection.find_one({"tipo":"area"})
-    codigoEquipo = hospital["codigoIdentificacion"] + "-" + area["codigoIdentificacon"] + "-" + generateCode(4)
     data = request.get_json()
+    hospital = usuarios_collection.find_one({"tipo":"hospital"})
+    area = areas_collection.find_one({"nombre": data["area"]})
+    documentoResponsable = area['documentoResponsableArea']
+    codigoEquipo = hospital["codigoIdentificacion"] + "-" + area["codigoIdentificacion"] + "-" + generateCode(4)
+    codigoEquipo = codigoEquipo[5:]
     equipo = {
         "codigoIdentificacion": codigoEquipo,
         "hospital": hospital['nombre'],
-        "area": data["area"],
-        "documentoResponsableArea": data["documentoResponsableArea"],
-        "Tipo": data.get("Tipo"),                       
-        "Marca": data.get("Marca"),
-        "Modelo": data.get("Modelo"),
-        "Serie": data.get("Serie"),
+        "area": area["nombre"],
+        "documentoResponsableArea": documentoResponsable,
+        "Tipo": data.get("tipo"),                       
+        "Marca": data.get("marca"),
+        "Modelo": data.get("modelo"),
+        "Serie": data.get("serie"),
         "UltimoMantenimiento": "",
-        "ProximaVisita": usuarios_collection.find_one({"tipo":"hospital"})["proximaVisita"],
+        "ProximaVisita": "",
         "HojaVida": [],
-        "GuiaRapida": data.get("GuiaRapida"),
-        "Manual": data.get("Manual"),
-        "Rutinamantenimiento": data.get("Rutinamantenimiento"),
-        "Imagen": data.get("Imagen"),
-        "ReportesCalibracion": data.get("ReportesCalibracion"),
-        "RecomendacionesUso": data.get("RecomendacionesUso"),
+        "GuiaRapida":"",
+        "Manual": "",
+        "Rutinamantenimiento": "",
+        "Imagen": "",
+        "ReportesCalibracion": "",
+        "RecomendacionesUso": "",
     
     }
     equipos_collection.insert_one(equipo)
-
-
+    return jsonify({"msg": "Equipo creado exitosamente"}), 201
 
 @app.route('/getequipos/<codigoarea>', methods=['GET'])
-@jwt_required()
-def get_equipos():
-    data = request.get_json()
-    area = areas_collection.find_one({"codigoIdentificacion": data['codigoarea']})
+def get_equipos(codigoarea):
+    area = areas_collection.find_one({"codigoIdentificacion": codigoarea})
     if not area:
         return jsonify({"error": "Área no encontrada"}), 404
     else:
         equipos = equipos_collection.find({"area": area['nombre']})
-        return jsonify(equipos), 200
+        result = []
+        for equipo in equipos:
+            equipo['_id'] = str(equipo['_id'])
+            result.append(equipo)
+        return jsonify(result), 200
 
 
 ############### Final Equipos #######################
@@ -601,16 +666,18 @@ def firmar_mantenimiento():
 ############## Rutinas ################
 
 @app.route('/rutina', methods=['POST'])
-@jwt_required()
 def create_rutina():
     hospital = usuarios_collection.find_one({"tipo":"hospital"})
     data = request.get_json()
     Rutina = {
         "hospital": hospital['nombre'],
         "tipoequipo": data['equipo'],
+        "modelo": data['modelo'],
         "preguntas": data['preguntas'],
     }
     rutinas_collection.insert_one(Rutina)
+    return jsonify({"msg": "Rutina creada exitosamente"}), 201
+
 
 @app.route('/getrutina', methods=['GET'])
 @jwt_required()
