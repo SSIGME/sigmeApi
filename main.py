@@ -4,54 +4,85 @@ from bson import ObjectId
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 import random, string
 from pymongo import MongoClient 
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime   
 app = Flask(__name__)
 CORS(app)
 a='Cxv24KPcpogXnqgpDAXFerewrf'
 app.config['JWT_SECRET_KEY'] = 'Cxv24KPcpogXnqgpDAXF'
 jwt = JWTManager(app)
 client = MongoClient('mongodb+srv://atonikapp:wal1YKbRdSl0PirU@cluster0.ln4xz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
-db = client['SanCamen']
+db = client['ISAK']
 usuarios_collection = db['usuarios']
 equipos_collection = db['equipos']
 tipos_collection = db['tipos']
 areas_collection = db['areas']
-rutinas_collection = db['rutinas']
+preventivos_collection = db['preventivos']
+correctivos_collection = db['correctivos']
+mantenimientos_collection = db['mantenimientos']
 
-######  Funtionality ######
+
 def generateCode(num):
     codigo = ''.join(random.choices(string.ascii_uppercase + string.digits,k=num))
     return codigo
 
+def generateCodeNumber(num):
+    codigo = ''.join(random.choices(string.digits,k=num))
+    return codigo
 ###############################/##################### users ############################
+
 @app.route('/login', methods=['POST'])
 def login():
     """
-    Ruta para iniciar sesión.
+    Ruta para iniciar sesión y verificar que el usuario sea de tipo 'administrador'.
     Se envía un JSON con 'usuario' y 'contrasena'.
     """
     data = request.get_json()
-    user = usuarios_collection.find_one({"usuario": data['usuario'], "contrasena": data['contrasena'] ,"tipousuario": data["tipousuario"]})
-    if user:
-        return jsonify({"access_token": create_access_token(identity={"id": str(user['_id']), "tipo": user["tipousuario"],"hospital":user['hospital']})}), 200
+    db = client[data["codigoHospital"]]
+    usuarios_collection = db['usuarios']
+    print(data)
+    # Buscar usuario en la base de datos con el tipo de usuario 'administrador'
+    user = usuarios_collection.find_one({"documento": data['usuario'], "tipo": "administrador"})
+
+
+    if user and check_password_hash(user['contrasena'], data['contrasena']):
+        print(check_password_hash(user['contrasena'], data['contrasena']))
+        access_token = create_access_token(identity={
+            "id": str(user['_id']),
+            "tipo": user["tipo"],
+            "hospital": user['hospital']
+        })
+        return jsonify({
+            "access_token": access_token,
+            "tipo": user["tipo"],
+            "hospital": user["hospital"],
+        }), 200
     else:
-        return jsonify({"msg": "Usuario o contraseña incorrectos"}), 401
-    
+        print("no funciona")
+        return jsonify({"msg": "Usuario o contraseña incorrectos o no tiene permisos de administrador"}), 401
 
 
-@app.route('/logincode', methods=['POST'])
+#[.]
+@app.route('/login/code', methods=['POST'])
 def logincode():
     """
     Ruta para iniciar sesión.
     Se envía un JSON con 'codigo' y 'documento'.
     """
     data = request.get_json()
-    user = usuarios_collection.find_one({"codigo": data['codigo'], "tipo": data['tipo']})
+    print(data)
+    db = client[data["codigoHospital"]]
+    usuarios_collection = db['usuarios']
+    user = usuarios_collection.find_one({"estado":True, "codigo": data['codigo'], "tipo": data['tipo']})
     if user:
-        return jsonify({"access_token": create_access_token(identity={"id": str(user['_id']), "tipo": user["tipousuario"]})}), 200
+        # Incluir el campo firmaEstado en la respuesta
+        response = {
+            "access_token": create_access_token(identity={"id": str(user['_id']), "tipo": user["tipo"],"codigo": user["codigo"],"hospital": user['hospital'],"nombre":user["nombre"]}),
+            "firmaEstado": user.get("firmaEstado")  # Obtener firmaEstado del usuario
+        }
+        return jsonify(response), 200
     else:
         return jsonify({"msg": "Usuario o contraseña incorrectos"}), 401
-from flask_jwt_extended import jwt_required, get_jwt_identity
-
 
 
 @app.route('/protected/<tipo>', methods=['GET'])
@@ -78,7 +109,53 @@ def protected_route(tipo):
   
     return jsonify({"msg": "Acceso permitido", "user_id": user_id, "tipo": user['tipousuario']}), 200
 
+#[.]
+@app.route('/user/firma', methods=['POST'])
+@jwt_required()
+def update_user_firma():
+    """
+    Ruta para actualizar la firma de un técnico.
+    Recibe un JSON con 'codigoHospital', 'codigo' y 'firma' para actualizar la firma y el estado de firma.
+    """
+    data = request.get_json()
+    db = client[data["codigoHospital"]]
+    usuarios_collection = db['usuarios']
+    
+    # Buscamos el técnico por su código
+    tecnico = usuarios_collection.find_one({"codigo": data['codigo']})
 
+    if tecnico:
+        # Actualizamos la firma y el estado de firma a true
+        usuarios_collection.update_one(
+            {"codigo": data['codigo']},
+            {
+                "$set": {
+                    "firma": data['firma'],
+                    "firmaEstado": True
+                }
+            }
+        )
+        return jsonify({"msg": "Firma del técnico actualizada exitosamente"}), 200
+    else:
+        # Si no se encuentra el técnico, devolvemos un mensaje de error
+        return jsonify({"msg": "Técnico no encontrado"}), 404
+
+@app.route('/user/firma', methods=['GET'])
+@jwt_required()
+def get_firma():
+    """
+    Ruta para obtener la firma de un técnico.
+    Se envía un JSON con 'codigoHospital' y 'codigo'.
+    """
+    user = get_jwt_identity()
+    db = client[user["hospital"]]
+    usuarios_collection = db['usuarios']
+    codigouser = user["codigo"]
+    tecnico = usuarios_collection.find_one({"codigo": codigouser})
+    if tecnico:
+        return jsonify({"firma": tecnico['firma']}), 200
+    else:
+        return jsonify({"msg": "Técnico no encontrado"}), 404
 
 ########## crear ##########
 @app.route('/administrador', methods=['POST'])
@@ -112,33 +189,46 @@ def create_administrador():
 @jwt_required()
 def create_tecnico():
     """
-    Ruta para crear un usuario Técnico.
-    Se envía un JSON con 'codigo', 'fechaExpiracion', 'fechaCreacion', 'hospital', 'nombre', 'estado', 'documento', 'firma', 'tipoTecnico'.
+    Ruta para crear o actualizar un usuario Técnico.
+    Se envía un JSON con 'codigoHospital', 'fechaExpiracion', 'nombre', 'documento', 'empresa'.
     """
     data = request.get_json()
-    
+    db = client[data["codigoHospital"]]
+    usuarios_collection = db['usuarios']
     existing_user = usuarios_collection.find_one({"documento": data['documento']})
-    if existing_user:
-        return jsonify({"msg": "Ya existe un usuario con ese documento"}), 400
-    hospital_user = usuarios_collection.find_one({"tipo": "hospital"})
-    if not hospital_user:
-        return jsonify({"msg": "No se encontró el hospital"}), 404
-    
-    tecnico_data = {
-        "codigo": generateCode(6),
-        "fechaExpiracion": data['fechaExpiracion'],
-        "fechaCreacion": data['fechaCreacion'],
-        "hospital": hospital_user['nombre'],
-        "nombre": data['nombre'],
-        "estado": data['estado'],
-        "documento": data['documento'],
-        "firma": "",
-        "idManteniminetos": [],
-        "tipo": data['tecnico']
-    }
-    usuarios_collection.insert_one(tecnico_data)
-    return jsonify({"msg": "Técnico creado exitosamente"}), 201
 
+    if existing_user:
+        # Si el técnico ya existe, actualizamos los datos necesarios
+        usuarios_collection.update_one(
+            {"documento": data['documento']},
+            {
+                "$set": {
+                    "nombre": data['nombre'],
+                    "empresa": data['empresa'],
+                    "fechaExpiracion": data['fechaExpiracion'],
+                    "estado": True
+                }
+            }
+        )
+        return jsonify({"msg": "Datos del técnico actualizados exitosamente"}), 200
+    else:
+        # Si el técnico no existe, lo creamos
+        tecnico_data = {
+            "codigo": generateCode(6),
+            "fechaExpiracion": data['fechaExpiracion'],
+            "fechaCreacion": datetime.now().strftime("%Y-%m-%d"),
+            "hospital": data["codigoHospital"],
+            "nombre": data['nombre'],
+            "estado": True,
+            "documento": data['documento'],
+            "firma": "",
+            "firmaEstado": False,
+            "empresa": data["empresa"],
+            "idManteniminetos": [],
+            "tipo": 'tecnico'
+        }
+        usuarios_collection.insert_one(tecnico_data)
+        return jsonify({"msg": "Técnico creado exitosamente"}), 201
 @app.route('/profesional', methods=['POST'])
 def create_profesional():
     """
@@ -228,7 +318,6 @@ def create_hospital():
     if existing_user:
         return jsonify({"msg": "Ya existe un usuario con ese documento"}), 400
 
-   
     hospital_data = {
         "nombre": data['nombre'],
         "hospital": "hospital",
@@ -298,7 +387,24 @@ def create_responsableArea():
     usuarios_collection.insert_one(responsableArea_data)
     return jsonify({"msg": "Técnico creado exitosamente"}), 201
 
+#[.]
+@app.route('/get/users/<hospital>/<tipo>', methods=['GET'])
+@jwt_required()
+def get_users(hospital, tipo):
+    """
+    Ruta para obtener todos los profesionales según el hospital y tipo.
+    """
+    db = client[hospital]
+    usuarios_collection = db['usuarios']
+    usuarios = usuarios_collection.find({"tipo": tipo})
+    result = []
 
+    for usuario in usuarios:
+        usuario['_id'] = str(usuario['_id'])  # Convertir ObjectId a string
+        result.append(usuario)
+       
+    print(result)
+    return jsonify(result), 200
 ########## crear final ##########
 ########## editar ##########
 @app.route('/usuario/<codigo>', methods=['PUT'])
@@ -426,11 +532,10 @@ def create_area():
         areas_collection.insert_one(Area)
     return jsonify({"msg": "Area creada"}), 201
 
-@app.route('/getareas', methods=['GET'])
-def get_all_areas():
-    """
-    Ruta para obtener todas las áreas.1
-    """
+@app.route('/getareas/<codigoHospital>', methods=['GET'])
+def get_all_areas(codigoHospital):
+    db = client[codigoHospital]
+    areas_collection = db['areas']
     areas = areas_collection.find()  # Fetch all areas from the collection
     result = []
     
@@ -504,9 +609,11 @@ def get_modelos(tipo, marca):
     return jsonify(result), 200
 
 
-@app.route('/getarea/<codigo>', methods=['GET'])
-def get_area(codigo):
-    area = areas_collection.find_one({"codigoIdentificacion":codigo})
+@app.route('/getarea/<codigoHospital>/<codigoArea>', methods=['GET'])
+def get_area(codigoHospital, codigoArea):
+    db = client[codigoHospital]
+    areas_collection = db['areas']
+    area = areas_collection.find_one({"codigoIdentificacion": codigoArea})
     if not area:
         return jsonify({"error": "Área no encontrada"}), 404
     else:
@@ -544,15 +651,32 @@ def update_responsable_area(codigo):
 ############### Areas Final #######################
 
 ############### Equipos #######################
-@app.route('/equipo/<codigoIdentificacion>', methods=['GET'])
-@jwt_required()
-def get_equipo(codigoIdentificacion):
-    equipo = equipos_collection.find_one({"codigoIdentificacion": codigoIdentificacion})
-    if equipo:
-        return jsonify(equipo), 200
-    else:
-        return jsonify({"error": "Equipo no encontrado"}), 404
+@app.route('/getequipo/<codigoHospital>/<codigoIdentificacion>', methods=['GET'])
+def get_equipo(codigoIdentificacion, codigoHospital):
+    try:
+        db = client[codigoHospital]
+        equipos_collection = db['equipos']
+        equipo = equipos_collection.find_one({"codigoIdentificacion": codigoIdentificacion})
+        if equipo:
+            print(equipo["HojaVida"] )
+            equipo = convert_objectid(equipo)  # Convert ObjectId to string
+            return jsonify(equipo), 200
+        else:
+            return jsonify({"error": "Equipo no encontrado"}), 404
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
+def convert_objectid(data):
+    """ Recursively convert ObjectId to string in a MongoDB document """
+    if isinstance(data, list):
+        return [convert_objectid(item) for item in data]
+    elif isinstance(data, dict):
+        return {key: convert_objectid(value) for key, value in data.items()}
+    elif isinstance(data, ObjectId):
+        return str(data)
+    else:
+        return data
+    
 @app.route('/equipo', methods=['POST'])
 def equipo():
     data = request.get_json()
@@ -579,30 +703,27 @@ def equipo():
         "Imagen": "",
         "ReportesCalibracion": "",
         "RecomendacionesUso": "",
-    
     }
     equipos_collection.insert_one(equipo)
     return jsonify({"msg": "Equipo creado exitosamente"}), 201
 
-@app.route('/getequipos/<codigoarea>', methods=['GET'])
-def get_equipos(codigoarea):
-    area = areas_collection.find_one({"codigoIdentificacion": codigoarea})
-    if not area:
-        return jsonify({"error": "Área no encontrada"}), 404
-    else:
-        equipos = equipos_collection.find({"area": area['nombre']})
-        result = []
-        for equipo in equipos:
-            equipo['_id'] = str(equipo['_id'])
-            result.append(equipo)
-        return jsonify(result), 200
-
-
+@app.route('/getequipos/<codigoHospital>/<codigoArea>', methods=['GET'])
+def get_equipos(codigoHospital,codigoArea):
+    db = client[codigoHospital]
+    equipos_collection = db['equipos']
+    areas_collection = db['areas']
+    area = areas_collection.find_one({"codigoIdentificacion": codigoArea})
+    equipos = equipos_collection.find({"area": area["nombre"]})
+    result = []
+    for equipo in equipos:
+        equipo['_id'] = str(equipo['_id'])
+        result.append(equipo)
+    return jsonify(result), 200 
 ############### Final Equipos #######################
 
 
 ############ Mantenimientos ################
-@app.route('/mantenimiento', methods=['POST'])
+""" @app.route('/mantenimiento', methods=['POST'])
 @jwt_required()
 def mantenimiento():
     hospital = usuarios_collection.find_one({"tipo":"hospital"})
@@ -631,6 +752,59 @@ def mantenimiento():
                 "$set": {"UltimoMantenimiento": data["fecha"]}
             }
         )
+ """
+
+@app.route('/mantenimiento', methods=['POST'])
+@jwt_required()
+def mantenimientocreate():
+    data = request.get_json()
+    tecnico = get_jwt_identity()
+    db = client[data["codigoHospital"]]
+    codeMantenimiento = int(data["idMantenimiento"])
+    mantenimiento = {
+        "fecha": data["fecha"],
+        "idMantenimiento": codeMantenimiento,
+        "codigoIdentificacionEquipo": data['IdEquipo'],
+        "tipoMantenimiento": data['tipoMantenimiento'],
+        "tenico": tecnico['nombre'],
+        "hospital": tecnico['hospital'],
+        "respuestas": data['respuestas'],
+        "firmaTecnico": data['firma'],
+        "finished": data['finished'],
+        "duracion": data['duracion'],
+        "firmadoPorRecibidor": False
+    }  
+    equipos_collection = db['equipos']
+    mantenimientoexistente = equipos_collection.find_one({"codigoIdentificacion": data['IdEquipo'], "HojaVida.idMantenimiento": codeMantenimiento})
+    if mantenimientoexistente is not None:
+        print("Se ha encontrado un mantenimiento con ese id")
+        equipos_collection.update_one(
+            {"codigoIdentificacion": data['IdEquipo']},
+            {"$pull": {"HojaVida": {"idMantenimiento": codeMantenimiento}}}
+        )
+        equipos_collection.update_one(
+        {"codigoIdentificacion": data['IdEquipo']},
+        {"$push": {"HojaVida": mantenimiento}}
+        )
+        return jsonify({"msg": "Mantenimiento sobreescrito exitosamente"}), 201
+    else:
+        equipos_collection.find_one_and_update(
+        {"codigoIdentificacion": data['IdEquipo']},
+        {"$push": {"HojaVida": mantenimiento}}
+        ) 
+        return jsonify({"msg": "Mantenimiento creado exitosamente desde 0"}), 201
+
+
+@app.route('/mantenimiento/<codigoHospital>/<codigoEquipo>/<tipomantenimiento>', methods=['GET'])
+def get_mantenimiento(codigoHospital, codigoEquipo, tipomantenimiento):
+    db = client[codigoHospital]
+    equipos_collection = db['equipos']
+    equipo = equipos_collection.find_one({"codigoIdentificacion": codigoEquipo})
+    if not equipo:
+        return jsonify({"msg": "Equipo no encontrado"}), 404
+    mantenimiento = equipo.get("HojaVida", [])
+    mantenimiento = [mantenimiento for mantenimiento in equipo.get("HojaVida", []) if not mantenimiento.get("finished", True) and mantenimiento.get("tipoMantenimiento") == tipomantenimiento]
+    return jsonify(mantenimiento), 200
 
 @app.route('/firmar_mantenimiento', methods=['POST'])
 @jwt_required()
@@ -665,28 +839,74 @@ def firmar_mantenimiento():
 
 ############## Rutinas ################
 
-@app.route('/rutina', methods=['POST'])
-def create_rutina():
-    hospital = usuarios_collection.find_one({"tipo":"hospital"})
+@app.route('/preventivo', methods=['POST'])
+def create_preventivo():
     data = request.get_json()
-    Rutina = {
-        "hospital": hospital['nombre'],
-        "tipoequipo": data['equipo'],
-        "modelo": data['modelo'],
-        "preguntas": data['preguntas'],
+    hospital_data = usuarios_collection.find_one({"tipo": "hospital"})
+    hospital = hospital_data['nombre'] if hospital_data else "Desconocido"
+    rutina = {
+        "hospital": hospital,
+        "tipoequipo": data.get('tipoequipo'),
+        "modelo": data.get('modelo'),
+        "marca": data.get('marca'),
+        "preguntas": data.get('preguntas', [])
     }
-    rutinas_collection.insert_one(Rutina)
+    preventivos_collection.insert_one(rutina)
     return jsonify({"msg": "Rutina creada exitosamente"}), 201
 
+@app.route('/preventivo/<tipoequipo>/<marca>/<modelo>', methods=['GET'])
+def get_preventivo(tipoequipo, marca, modelo):
+    preventivo = preventivos_collection.find_one({"tipoequipo": tipoequipo, "marca": marca, "modelo": modelo})
+    if preventivo is not None:
+        del preventivo['_id'], preventivo['tipoequipo'], preventivo['marca'], preventivo['modelo'], preventivo['hospital']
+        for pregunta in preventivo.get('preguntas', []):
+            if pregunta['tipo'] == "cerrada":
+                pregunta['opciones'] = [str(opcion) for opcion in pregunta['opciones']]
+            else:
+                pregunta['opciones'] = ""  # Establece un arreglo vacío si no hay opciones
+        return jsonify(preventivo), 200
+    else:
+        preventivo = preventivos_collection.find_one({"tipoequipo": {"$regex": f'^{tipoequipo}$', "$options": "i"}, "marca": "GENERAL"})
+        if preventivo is not None:
+            del preventivo['_id'], preventivo['tipoequipo'], preventivo['marca'], preventivo['modelo'], preventivo['hospital']
+            return jsonify(preventivo), 200
+        else:
+            return jsonify({"msg": "No se encontró la rutina del mantenimiento preventivo"}), 404
 
-@app.route('/getrutina', methods=['GET'])
-@jwt_required()
-def get_rutina():
+@app.route('/correctivo', methods=['POST'])
+def create_correctivo():
     data = request.get_json()
-    rutina = rutinas_collection.find_one({"tipoequipo": data['tipoequipo']})
-    if not rutina:
-        return jsonify({"error": "Rutina no encontrada para este equipo"}), 404
-    return jsonify(rutina), 200
+    hospital_data = usuarios_collection.find_one({"tipo": "hospital"})
+    hospital = hospital_data['nombre'] if hospital_data else "Desconocido"
+    rutina = {
+        "hospital": hospital,
+        "tipoequipo": data.get('tipoequipo'),
+        "modelo": data.get('modelo'),
+        "marca": data.get('marca'),
+        "preguntas": data.get('preguntas', [])
+    }
+    correctivos_collection.insert_one(rutina)
+    return jsonify({"msg": "Rutina creada exitosamente"}), 201
+
+@app.route('/correctivo/<tipoequipo>/<marca>/<modelo>', methods=['GET'])
+def get_correctivo(tipoequipo, marca, modelo):
+    correctivo = correctivos_collection.find_one({"tipoequipo": tipoequipo, "marca": marca, "modelo": modelo})
+    if correctivo is not None:
+        del correctivo['_id'], correctivo['tipoequipo'], correctivo['marca'], correctivo['modelo'], correctivo['hospital']
+        for pregunta in correctivo.get('preguntas', []):
+            if pregunta['tipo'] == "cerrada":
+                pregunta['opciones'] = [str(opcion) for opcion in pregunta['opciones']]
+            else:
+                pregunta['opciones'] = ""  # Establece un arreglo vacío si no hay opciones
+        return jsonify(correctivo), 200
+    else:
+        correctivo = correctivos_collection.find_one({"tipoequipo": {"$regex": f'^{tipoequipo}$', "$options": "i"}, "marca": "GENERAL"})
+        if correctivo is not None:
+            del correctivo['_id'], correctivo['tipoequipo'], correctivo['marca'], correctivo['modelo'], correctivo['hospital']
+            return jsonify(correctivo), 200
+        else:
+            return jsonify({"msg": "No se encontró la rutina del mantenimiento correctivo"}), 404
+
 ############## Final Rutinas ################
 @app.route('/codigos', methods=['GET'])
 @jwt_required()
@@ -701,13 +921,6 @@ def listar_codigos():
     # Create a list of codigos only for users that have 'codigo'
     codigos = [{"codigo": usuario["codigo"], "nombre": usuario["nombre"]} for usuario in usuarios]
     
-    # Return the list of codigos
-    return jsonify(codigos), 200
-
-
-
+    #
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
-
-
-
+    app.run(host='0.0.0.0', port=5000, debug=True)
