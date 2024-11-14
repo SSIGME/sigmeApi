@@ -260,14 +260,15 @@ def create_profesional():
     return jsonify({"msg": "Profesional creado exitosamente"}), 201
 
 
-@app.route('/getprofesionales', methods=['GET'])
-def get_profesionales():
+@app.route('/getprofesionales/<codigoHospital>', methods=['GET'])
+def get_profesionales(codigoHospital):
     """
     Ruta para obtener todos los profesionales.
     """
+    db = client[codigoHospital]
+    usuarios_collection = db['usuarios']
     profesionales = usuarios_collection.find({"tipo": "profesional"})
     result = []
-    
     for profesional in profesionales:
         profesional['_id'] = str(profesional['_id'])
         result.append(profesional)
@@ -341,19 +342,19 @@ def create_hospital():
     return jsonify({"msg": "Encargado creado exitosamente"}), 201
 
 ### Obtener datos hospital
-@app.route('/hospital', methods=['GET'])
-@jwt_required()
-def get_hospital():
+@app.route('/hospital/<codigoHospital>', methods=['GET'])
+def get_hospital(codigoHospital):
     """
     Ruta para obtener un hospital basado en su tipo.
     """
+    db = client[codigoHospital]
+    usuarios_collection = db['usuarios']
     hospital = usuarios_collection.find_one({"tipo": "hospital"})  # Assuming 'tipo' is the field you're filtering by
     if not hospital:
         return jsonify({"msg": "No se encontró un hospital con ese tipo"}), 404
-
-    hospital['_id'] = str(hospital['_id'])
-    
-    return jsonify(hospital), 200
+    else:
+        hospital['_id'] = str(hospital['_id'])
+        return jsonify(hospital), 200
 
 
 @app.route('/responsableArea', methods=['POST'])
@@ -382,7 +383,7 @@ def create_responsableArea():
         "documento": data['documento'],
         "firma": "",
         "idManteniminetos": [],
-        "tipo": data['responsableArea']
+        "tipo": data['responsableArea'],
     }
     usuarios_collection.insert_one(responsableArea_data)
     return jsonify({"msg": "Técnico creado exitosamente"}), 201
@@ -515,22 +516,32 @@ def update_exp():
 @app.route('/area', methods=['POST'])
 def create_area():
     data = request.get_json()
-    hospital = usuarios_collection.find_one({"tipo":"hospital"})
-    codearea = hospital["codigoIdentificacion"] + "-" + generateCode(4)
+    db = client[data["codigoHospital"]]
+    codearea = data["codigoHospital"] + "-" + generateCode(4)
+    areas_collection = db['areas']
+    users_collection = db['usuarios']
     area = areas_collection.find_one({"nombre": data['nombre']})
     if area is not None:
         return jsonify({"msg": "Ya existe un área con ese nombre"}), 206
     else:
         Area = {
             "codigoIdentificacion": codearea,
-            "hospital": hospital['nombre'],
+            "hospital": data['codigoHospital'],
             "nombre": data['nombre'],
             "idEquipos": [],
             "responsableArea":data["responsableArea"],
             "documentoResponsableArea":data["documentoResponsableArea"],
         }
         areas_collection.insert_one(Area)
-    return jsonify({"msg": "Area creada"}), 201
+        profesional = users_collection.find_one(
+            {"documento": data["documentoResponsableArea"]},
+        )
+        if profesional is not None:
+            users_collection.update_one(
+                {"documento": data["documentoResponsableArea"]},
+                {"$set": {"tipo": "responsableArea", "estado": True, "codigo":generateCode(6), "area": data['nombre']}},
+            )
+    return jsonify({"msg": "Area creada y usuario actualizado"}), 201
 
 @app.route('/getareas/<codigoHospital>', methods=['GET'])
 def get_all_areas(codigoHospital):
@@ -770,6 +781,7 @@ def mantenimientocreate():
         "hospital": tecnico['hospital'],
         "respuestas": data['respuestas'],
         "firmaTecnico": data['firma'],
+        "firmaRecibidor": "",
         "finished": data['finished'],
         "duracion": data['duracion'],
         "firmadoPorRecibidor": False
@@ -806,33 +818,20 @@ def get_mantenimiento(codigoHospital, codigoEquipo, tipomantenimiento):
     mantenimiento = [mantenimiento for mantenimiento in equipo.get("HojaVida", []) if not mantenimiento.get("finished", True) and mantenimiento.get("tipoMantenimiento") == tipomantenimiento]
     return jsonify(mantenimiento), 200
 
-@app.route('/firmar_mantenimiento', methods=['POST'])
-@jwt_required()
-def firmar_mantenimiento():
-    data = request.get_json()
-    codigo_identificacion = data["codigoIdentificacionEquipo"]
-    numero_reporte = data["numeroReporte"]
-
-
-    equipo = equipos_collection.find_one({"codigoIdentificacion": codigo_identificacion, "HojaVida.numeroReporte": numero_reporte})
-    
-    if equipo:
-
-        equipos_collection.update_one(
-            {
-                "codigoIdentificacion": codigo_identificacion,
-                "HojaVida.numeroReporte": numero_reporte
-            },
-            {
-                "$set": {
-                    "HojaVida.$.firmaRecibidor": data["firmaRecibidor"],
-                    "HojaVida.$.estado": True
-                }
-            }
-        )
-        return jsonify({"message": "Mantenimiento actualizado con éxito"}), 200
+@app.route('/firmar_mantenimiento/<codigoHospital>/<codigoEquipo>/<idMantenimiento>', methods=['POST'])
+def firmar_mantenimiento(codigoHospital,codigoEquipo,idMantenimiento):
+    db = client[codigoHospital]
+    equipos_collection = db['equipos']
+    mantenimiento = equipos_collection.find_one({"codigoIdentificacion": codigoEquipo, "HojaVida.idMantenimiento": int(idMantenimiento)})
+    if not mantenimiento:
+        return jsonify({"msg": "Mantenimiento no encontrado"}), 404
     else:
-        return jsonify({"error": "Mantenimiento o equipo no encontrado"}), 404
+        print("Se ha encontrado",mantenimiento)
+        equipos_collection.update_one(
+            {"codigoIdentificacion": codigoEquipo, "HojaVida.idMantenimiento": int(idMantenimiento)},
+            {"$set": {"HojaVida.$.firmadoPorRecibidor": True}}
+        )
+        return jsonify({"msg": "Mantenimiento firmado exitosamente"}), 200
 
  ############ Final Mantenimientos ################   
 
@@ -920,7 +919,74 @@ def listar_codigos():
     
     # Create a list of codigos only for users that have 'codigo'
     codigos = [{"codigo": usuario["codigo"], "nombre": usuario["nombre"]} for usuario in usuarios]
+    return jsonify(codigos), 200
     
-    #
+@app.route('/api/reporte/<codigoHospital>', methods=['POST'])
+def guardar_reporte(codigoHospital):
+    db = client[codigoHospital]  # Nombre de la base de datos
+    reportes_collection = db["reportes"]
+    try:
+
+        reporte = request.get_json()
+        print("Datos JSON del reporte:", reporte)
+
+
+        fecha_actual = datetime.now().strftime("%Y-%m-%d")
+
+
+        reporte["fecha"] = fecha_actual
+
+
+        resultado = reportes_collection.insert_one(reporte)
+
+
+        return jsonify({"mensaje": "Reporte guardado exitosamente", "id": str(resultado.inserted_id)}), 201
+    except Exception as e:
+        print("Error al guardar el reporte:", e)
+        return jsonify({"error": "Hubo un error al guardar el reporte"}), 500
+@app.route('/api/reportes/<codigoHospital>', methods=['GET'])
+def obtener_reportes(codigoHospital):
+    db = client[codigoHospital]  # Nombre de la base de datos
+    reportes_collection = db["reportes"]
+    try:
+
+        reportes = list(reportes_collection.find())
+
+
+        for reporte in reportes:
+            reporte['_id'] = str(reporte['_id'])
+
+        return jsonify(reportes), 200
+    except Exception as e:
+        print("Error al obtener los reportes:", e)
+        return jsonify({"error": "Hubo un error al obtener los reportes"}), 500
+
+
+@app.route('/getpendientes/<codigoHospital>/<codigoUsuario>', methods=['GET'])
+def getpendientes(codigoHospital, codigoUsuario):
+    db = client[codigoHospital]
+    equipos_collection = db['equipos']
+    areas_collection = db['areas']
+    user = usuarios_collection.find_one({"codigo": codigoUsuario})
+    if not user:
+        return jsonify({"msg": "Usuario no encontrado"}), 404
+    area = areas_collection.find_one({"nombre": user.get("area")})
+    if not area:
+        return jsonify({"msg": "El usuario no es responsable de ningún área"}), 404
+    equipos = equipos_collection.find({"area": area["nombre"]})
+    pendientes = []
+    for equipo in equipos:
+        for mantenimiento in equipo.get("HojaVida", []):
+            if mantenimiento.get("finished", True): #
+                mantenimiento_pendiente = mantenimiento.copy()  # Hacer una copia para evitar modificar el original
+                mantenimiento_pendiente["nombreEquipo"] = equipo.get("nombre")
+                mantenimiento_pendiente["codigoIdentificacion"] = equipo.get("codigoIdentificacion")
+                mantenimiento_pendiente["tipo"] = equipo.get("Tipo")
+                mantenimiento_pendiente["marca"] = equipo.get("Marca")
+                mantenimiento_pendiente["modelo"] = equipo.get("Modelo")                
+                pendientes.append(mantenimiento_pendiente)
+                
+    return jsonify(pendientes), 200
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
