@@ -5,7 +5,9 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 import random, string
 from pymongo import MongoClient 
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime   
+from datetime import datetime , timezone  
+from zeroconf import ServiceInfo, Zeroconf
+import socket
 app = Flask(__name__)
 CORS(app)
 a='Cxv24KPcpogXnqgpDAXFerewrf'
@@ -21,6 +23,19 @@ preventivos_collection = db['preventivos']
 correctivos_collection = db['correctivos']
 mantenimientos_collection = db['mantenimientos']
 
+zeroconf = Zeroconf()
+hostname = socket.gethostname()
+local_ip = socket.gethostbyname(socket.getfqdn())
+service_name = f"API-{hostname}-{random.randint(1000, 9999)}"
+service_info = ServiceInfo(
+    "_http._tcp.local.",  # El tipo de servicio, en este caso HTTP
+    f"{service_name}._http._tcp.local.",  # Nombre del servicio
+    addresses=[socket.inet_aton(local_ip)],  # La IP local
+    port=5000,  # El puerto en el que está corriendo la API
+    properties={},
+)
+zeroconf.register_service(service_info)
+print(f"Servidor mDNS anunciado en {local_ip}:5000")
 
 def generateCode(num):
     codigo = ''.join(random.choices(string.ascii_uppercase + string.digits,k=num))
@@ -29,7 +44,14 @@ def generateCode(num):
 def generateCodeNumber(num):
     codigo = ''.join(random.choices(string.digits,k=num))
     return codigo
-###############################/##################### users ############################
+
+
+def obtener_hora_actual():
+    ahora = datetime.now(timezone.utc)
+    # Formatear la hora actual en el formato requerido
+    return ahora.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+00:00'
+
+
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -129,10 +151,11 @@ def update_user_firma():
         usuarios_collection.update_one(
             {"codigo": data['codigo']},
             {
-                "$set": {
-                    "firma": data['firma'],
-                    "firmaEstado": True
-                }
+            "$set": {
+                "firma": data['firma'],
+                "firmaEstado": True,
+                "last_updated": obtener_hora_actual()
+            }
             }
         )
         return jsonify({"msg": "Firma del técnico actualizada exitosamente"}), 200
@@ -180,7 +203,8 @@ def create_administrador():
         "documento": data['documento'],
         "nombre": data['nombre'],
         "hospital": hospital_user['nombre'],
-        "tipo": data['administrador']
+        "tipo": data['administrador'],
+        "last_updated":obtener_hora_actual()
     }
     usuarios_collection.insert_one(admin_data)
     return jsonify({"msg": "Administrador creado exitosamente"}), 201
@@ -206,7 +230,8 @@ def create_tecnico():
                     "nombre": data['nombre'],
                     "empresa": data['empresa'],
                     "fechaExpiracion": data['fechaExpiracion'],
-                    "estado": True
+                    "estado": True,
+                    "last_updated": obtener_hora_actual()
                 }
             }
         )
@@ -225,7 +250,8 @@ def create_tecnico():
             "firmaEstado": False,
             "empresa": data["empresa"],
             "idManteniminetos": [],
-            "tipo": 'tecnico'
+            "tipo": 'tecnico',
+            "last_updated":obtener_hora_actual()
         }
         usuarios_collection.insert_one(tecnico_data)
         return jsonify({"msg": "Técnico creado exitosamente"}), 201
@@ -255,6 +281,7 @@ def create_profesional():
         "fechaCreacion": data['fechaCreacion'],
         "fechaExpiracion": data['fechaExpiracion'],
         "tipo": data['profesional'],
+        "last_updated":obtener_hora_actual(),
     }
     usuarios_collection.insert_one(profesional_data)
     return jsonify({"msg": "Profesional creado exitosamente"}), 201
@@ -304,6 +331,7 @@ def create_encargado():
         "fechaCreacion": data['fechaCreacion'],
         "fechaExpiracion": data['fechaExpiracion'],
         "tipo": data['encargado'],
+        "last_updated":obtener_hora_actual()
     }
     usuarios_collection.insert_one(encargado_data)
     return jsonify({"msg": "Encargado creado exitosamente"}), 201
@@ -337,6 +365,7 @@ def create_hospital():
         "ultimaVisita": data['ultimaVisita'],
         "responsableMantenimiento": data['responsableMantenimiento'],
         "estadoLicencia": True,
+        "last_updated":obtener_hora_actual()
     }
     usuarios_collection.insert_one(hospital_data)
     return jsonify({"msg": "Encargado creado exitosamente"}), 201
@@ -354,6 +383,7 @@ def get_hospital(codigoHospital):
         return jsonify({"msg": "No se encontró un hospital con ese tipo"}), 404
     else:
         hospital['_id'] = str(hospital['_id'])
+        
         return jsonify(hospital), 200
 
 
@@ -384,6 +414,7 @@ def create_responsableArea():
         "firma": "",
         "idManteniminetos": [],
         "tipo": data['responsableArea'],
+        "last_updated":obtener_hora_actual(),
     }
     usuarios_collection.insert_one(responsableArea_data)
     return jsonify({"msg": "Técnico creado exitosamente"}), 201
@@ -424,18 +455,18 @@ def update_usuario_estado(codigo):
             return jsonify({"msg": "Técnico no encontrado"}), 404
         usuarios_collection.update_one(
             {"codigo": codigo},
-            {"$set": {"estado": False}}
+            {"$set": {"estado": False, 
+                      "last_updated": obtener_hora_actual()
+                      }}
         )       
         return jsonify({"msg": "Estado del técnico actualizado a False"}), 200
 
-#### PATCH /usuario/12345 {"nombre": "Carlos López"} o {"documento":"10203102"}#####
+""" #### PATCH /usuario/12345 {"nombre": "Carlos López"} o {"documento":"10203102"}#####
 @app.route('/usuario/<id>', methods=['PATCH'])
 @jwt_required()
 def update_usuario(id):
-    """
     Ruta para actualizar un usuario responsableArea.
     Se puede actualizar 'nombre' o 'documento' proporcionando el ObjectId del usuario.
-    """
     data = request.get_json()
     
     # Verificar si el usuario existe
@@ -462,7 +493,7 @@ def update_usuario(id):
         return jsonify({"msg": "Usuario actualizado exitosamente"}), 200
     else:
         return jsonify({"msg": "No se proporcionaron campos para actualizar"}), 400
-
+ """
 
 
 @app.route('/usuario/valid/<documento>', methods=['GET'])
@@ -481,13 +512,11 @@ def update_Vencimiento(documento):
 
 
 
-@app.route('/usuario/updateexp', methods=['PATCH'])
+""" @app.route('/usuario/updateexp', methods=['PATCH'])
 @jwt_required()
 def update_exp():
-    """""
     Ruta para actualizar la fecha de expiracion de un usuario,
     parametros: documento, fechaExpiracion, estado
-    """
 
     data = request.get_json()
 
@@ -509,7 +538,7 @@ def update_exp():
     else:
         return jsonify({"msg": "No se proporcionaron campos para actualizar"}), 400
 
-########## editar final ##########
+########## editar final ########## """
 ##################### users ############################
 ############### Areas #######################
 
@@ -529,6 +558,7 @@ def create_area():
             "hospital": data['codigoHospital'],
             "nombre": data['nombre'],
             "idEquipos": [],
+            "last_updated":obtener_hora_actual(),
             "responsableArea":data["responsableArea"],
             "documentoResponsableArea":data["documentoResponsableArea"],
         }
@@ -539,7 +569,7 @@ def create_area():
         if profesional is not None:
             users_collection.update_one(
                 {"documento": data["documentoResponsableArea"]},
-                {"$set": {"tipo": "responsableArea", "estado": True, "codigo":generateCode(6), "area": data['nombre']}},
+                {"$set": {"tipo": "responsableArea", "estado": True, "codigo":generateCode(6), "area": data['nombre'], "last_updated":obtener_hora_actual()}},
             )
     return jsonify({"msg": "Area creada y usuario actualizado"}), 201
 
@@ -571,7 +601,8 @@ def createtipo():
             "tipo": data['tipo'],
             "marca": data['marca'],
             "modelo": data['modelo'],
-            "preguntas": []
+            "preguntas": [],
+            "last_updated":obtener_hora_actual(),
         }
         tipos_collection.insert_one(Tipo)        
     return jsonify({"msg": "Tipo creado"}), 201
@@ -713,7 +744,9 @@ def equipo():
         "Rutinamantenimiento": "",
         "Imagen": "",
         "ReportesCalibracion": "",
+        "last_updated":obtener_hora_actual(),
         "RecomendacionesUso": "",
+         "last_updated":obtener_hora_actual(),
     }
     equipos_collection.insert_one(equipo)
     return jsonify({"msg": "Equipo creado exitosamente"}), 201
@@ -784,7 +817,7 @@ def mantenimientocreate():
         "firmaRecibidor": "",
         "finished": data['finished'],
         "duracion": data['duracion'],
-        "firmadoPorRecibidor": False
+        "firmadoPorRecibidor": False,
     }  
     equipos_collection = db['equipos']
     mantenimientoexistente = equipos_collection.find_one({"codigoIdentificacion": data['IdEquipo'], "HojaVida.idMantenimiento": codeMantenimiento})
@@ -796,13 +829,19 @@ def mantenimientocreate():
         )
         equipos_collection.update_one(
         {"codigoIdentificacion": data['IdEquipo']},
-        {"$push": {"HojaVida": mantenimiento}}
+        {
+            "$set": {"last_updated": obtener_hora_actual()},
+            "$push": {"HojaVida": mantenimiento}
+        }
         )
         return jsonify({"msg": "Mantenimiento sobreescrito exitosamente"}), 201
     else:
         equipos_collection.find_one_and_update(
         {"codigoIdentificacion": data['IdEquipo']},
-        {"$push": {"HojaVida": mantenimiento}}
+        {
+        "$push": {"HojaVida": mantenimiento},
+         "$set": {"last_updated": obtener_hora_actual()}
+        }
         ) 
         return jsonify({"msg": "Mantenimiento creado exitosamente desde 0"}), 201
 
@@ -829,7 +868,8 @@ def firmar_mantenimiento(codigoHospital,codigoEquipo,idMantenimiento):
         print("Se ha encontrado",mantenimiento)
         equipos_collection.update_one(
             {"codigoIdentificacion": codigoEquipo, "HojaVida.idMantenimiento": int(idMantenimiento)},
-            {"$set": {"HojaVida.$.firmadoPorRecibidor": True}}
+            {"$set": {"HojaVida.$.firmadoPorRecibidor": True},
+             "$set":{"last_updated": obtener_hora_actual()}}
         )
         return jsonify({"msg": "Mantenimiento firmado exitosamente"}), 200
 
@@ -848,7 +888,8 @@ def create_preventivo():
         "tipoequipo": data.get('tipoequipo'),
         "modelo": data.get('modelo'),
         "marca": data.get('marca'),
-        "preguntas": data.get('preguntas', [])
+        "preguntas": data.get('preguntas', []),
+        "last_updated":obtener_hora_actual(),
     }
     preventivos_collection.insert_one(rutina)
     return jsonify({"msg": "Rutina creada exitosamente"}), 201
@@ -882,7 +923,8 @@ def create_correctivo():
         "tipoequipo": data.get('tipoequipo'),
         "modelo": data.get('modelo'),
         "marca": data.get('marca'),
-        "preguntas": data.get('preguntas', [])
+        "preguntas": data.get('preguntas', []),
+        "last_updated":obtener_hora_actual(),
     }
     correctivos_collection.insert_one(rutina)
     return jsonify({"msg": "Rutina creada exitosamente"}), 201
@@ -934,7 +976,9 @@ def guardar_reporte(codigoHospital):
         fecha_actual = datetime.now().strftime("%Y-%m-%d")
 
 
+
         reporte["fecha"] = fecha_actual
+        reporte["last_updated"]=obtener_hora_actual()
 
 
         resultado = reportes_collection.insert_one(reporte)
