@@ -6,7 +6,6 @@ Centros = {
     "db1": {
         "uri": "mongodb://localhost:27017",
         "name": "ISAK",
-     
     },
 
 }

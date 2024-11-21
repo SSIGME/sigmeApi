@@ -171,7 +171,6 @@ def start_sync():
         thread = threading.Thread(target=change_stream_listener, args=(col1, col2))
         threads.append(thread)
         thread.start()
-       
     print("Iniciando sincronización periódica...")
     print("!Sincronizacion existosa!")
     print("Esperando cambios")

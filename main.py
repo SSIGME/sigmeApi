@@ -13,7 +13,7 @@ CORS(app)
 a='Cxv24KPcpogXnqgpDAXFerewrf'
 app.config['JWT_SECRET_KEY'] = 'Cxv24KPcpogXnqgpDAXF'
 jwt = JWTManager(app)
-client = MongoClient('mongodb+srv://atonikapp:wal1YKbRdSl0PirU@cluster0.ln4xz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
+client = MongoClient('mongodb://localhost:27017')
 db = client['ISAK']
 usuarios_collection = db['usuarios']
 equipos_collection = db['equipos']
@@ -45,13 +45,9 @@ def generateCodeNumber(num):
     codigo = ''.join(random.choices(string.digits,k=num))
     return codigo
 
-
 def obtener_hora_actual():
-    ahora = datetime.now(timezone.utc)
-    # Formatear la hora actual en el formato requerido
-    return ahora.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+00:00'
-
-
+    # Obtener la hora actual en UTC como objeto datetime
+    return datetime.now(timezone.utc)
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -968,22 +964,12 @@ def guardar_reporte(codigoHospital):
     db = client[codigoHospital]  # Nombre de la base de datos
     reportes_collection = db["reportes"]
     try:
-
         reporte = request.get_json()
         print("Datos JSON del reporte:", reporte)
-
-
         fecha_actual = datetime.now().strftime("%Y-%m-%d")
-
-
-
         reporte["fecha"] = fecha_actual
         reporte["last_updated"]=obtener_hora_actual()
-
-
         resultado = reportes_collection.insert_one(reporte)
-
-
         return jsonify({"mensaje": "Reporte guardado exitosamente", "id": str(resultado.inserted_id)}), 201
     except Exception as e:
         print("Error al guardar el reporte:", e)
