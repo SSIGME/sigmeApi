@@ -7,6 +7,9 @@ from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime , timezone  
 from zeroconf import ServiceInfo, Zeroconf
+import subprocess
+
+import os 
 import socket
 app = Flask(__name__)
 CORS(app)
@@ -22,21 +25,6 @@ areas_collection = db['areas']
 preventivos_collection = db['preventivos']
 correctivos_collection = db['correctivos']
 mantenimientos_collection = db['mantenimientos']
-
-zeroconf = Zeroconf()
-hostname = socket.gethostname()
-local_ip = socket.gethostbyname(socket.getfqdn())
-service_name = f"API-{hostname}-{random.randint(1000, 9999)}"
-service_info = ServiceInfo(
-    "_http._tcp.local.",  # El tipo de servicio, en este caso HTTP
-    f"{service_name}._http._tcp.local.",  # Nombre del servicio
-    addresses=[socket.inet_aton(local_ip)],  # La IP local
-    port=5000,  # El puerto en el que está corriendo la API
-    properties={},
-)
-zeroconf.register_service(service_info)
-print(f"Servidor mDNS anunciado en {local_ip}:5000")
-
 def generateCode(num):
     codigo = ''.join(random.choices(string.ascii_uppercase + string.digits,k=num))
     return codigo
