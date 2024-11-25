@@ -6,7 +6,6 @@ import random, string
 from pymongo import MongoClient 
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime , timezone  
-from zeroconf import ServiceInfo, Zeroconf
 import subprocess
 
 import os 
@@ -36,6 +35,9 @@ def generateCodeNumber(num):
 def obtener_hora_actual():
     # Obtener la hora actual en UTC como objeto datetime
     return datetime.now(timezone.utc)
+@app.route("/health")
+def health_check():
+    return "OK", 200
 
 @app.route('/login', methods=['POST'])
 def login():
