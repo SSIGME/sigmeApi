@@ -3,6 +3,8 @@ from datetime import datetime
 from config import Centros, uriGeneral, periodicaSinc
 import threading
 import time
+import pytz
+from dateutil import parser  
 Pares=[]
 threads=[]
 
@@ -106,21 +108,28 @@ def sync_document(source_doc, target_collection):
    
         
 def sync_document2(source_doc, target_collection):
-    """Sincroniza un documento único respetando el principio de 'último cambio gana'."""
-    # Obtiene el documento correspondiente de la colección de destino
     target_doc = target_collection.find_one({'_id': source_doc['_id']})
     
-    # Verifica si 'last_updated' existe en source_doc
     if 'last_updated' not in source_doc:
         print(f"Advertencia: El documento con _id={source_doc['_id']} no tiene 'last_updated'. No se sincronizará.")
         return
 
-    # Sincroniza si no existe en el destino o si el documento fuente es más reciente
-    if not target_doc or source_doc['last_updated'] > target_doc.get('last_updated', datetime.min):
+    # Convierte last_updated a datetime y asegura que ambas sean naive (sin zona horaria)
+    source_last_updated = source_doc['last_updated']
+    if isinstance(source_last_updated, str):
+        source_last_updated = parser.parse(source_last_updated)
+    if source_last_updated.tzinfo is not None:  # Si tiene zona horaria, la elimina
+        source_last_updated = source_last_updated.astimezone(pytz.UTC).replace(tzinfo=None)
+
+    target_last_updated = target_doc.get('last_updated', datetime.min) if target_doc else datetime.min
+    if isinstance(target_last_updated, str):
+        target_last_updated = parser.parse(target_last_updated)
+    if target_last_updated.tzinfo is not None:  # Si tiene zona horaria, la elimina
+        target_last_updated = target_last_updated.astimezone(pytz.UTC).replace(tzinfo=None)
+
+    # Compara y sincroniza
+    if not target_doc or source_last_updated > target_last_updated:
         target_collection.replace_one({'_id': source_doc['_id']}, source_doc, upsert=True)
-       
-    else:
-      pass
 
 
 def sync_initial(source_collection, target_collection):
@@ -171,6 +180,7 @@ def start_sync():
         thread = threading.Thread(target=change_stream_listener, args=(col1, col2))
         threads.append(thread)
         thread.start()
+       
     print("Iniciando sincronización periódica...")
     print("!Sincronizacion existosa!")
     print("Esperando cambios")

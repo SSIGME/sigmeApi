@@ -1,15 +1,25 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from bson import ObjectId
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 import random, string
 from pymongo import MongoClient 
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime , timezone  
+from datetime import datetime, timezone
+from datetime import timedelta
 import subprocess
-
+from werkzeug.utils import secure_filename
+from google.cloud import storage
+import requests
 import os 
 import socket
+
+
+bucket_name = 'sigme-resources'
+key_file_uploader_path = "uploader_images.json"
+key_file_viewer_path = "userviewer.json"
+storage_client = storage.Client.from_service_account_json(key_file_uploader_path)
+bucket = storage_client.bucket(bucket_name)
 app = Flask(__name__)
 CORS(app)
 a='Cxv24KPcpogXnqgpDAXFerewrf'
@@ -17,6 +27,8 @@ app.config['JWT_SECRET_KEY'] = 'Cxv24KPcpogXnqgpDAXF'
 jwt = JWTManager(app)
 client = MongoClient('mongodb://localhost:27017')
 db = client['ISAK']
+user = 'userhospital'
+password = 'Thegostmane1!'
 usuarios_collection = db['usuarios']
 equipos_collection = db['equipos']
 tipos_collection = db['tipos']
@@ -24,6 +36,8 @@ areas_collection = db['areas']
 preventivos_collection = db['preventivos']
 correctivos_collection = db['correctivos']
 mantenimientos_collection = db['mantenimientos']
+
+
 def generateCode(num):
     codigo = ''.join(random.choices(string.ascii_uppercase + string.digits,k=num))
     return codigo
@@ -38,6 +52,110 @@ def obtener_hora_actual():
 @app.route("/health")
 def health_check():
     return "OK", 200
+@app.route('/delete/equipo/<codigoHospital>/<codigoEquipo>', methods=['DELETE'])
+def delete_equipo(codigoHospital, codigoEquipo):
+    db = client[codigoHospital]
+    equipos_collection = db['equipos']
+    areas_collection = db['areas']
+    equipo = equipos_collection.find_one({"codigoIdentificacion": codigoEquipo})
+    if not equipo:
+        return jsonify({"msg": "Equipo no encontrado"}), 404
+    areas_collection.update_one(
+        {"nombre": equipo["area"]},
+        {"$pull": {"idEquipos": codigoEquipo}}
+    )
+    equipos_collection.delete_one({"codigoIdentificacion": codigoEquipo})
+    return jsonify({"msg": "Equipo eliminado exitosamente"}), 200
+
+@app.route('/upload_image/<codigoHospital>/<codigoEquipo>', methods=['POST'])
+def upload_file(codigoHospital, codigoEquipo):
+    if 'file' not in request.files:
+        return jsonify({'error': 'No se proporcionó ningún archivo'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'Nombre de archivo inválido'}), 400  
+    filename = secure_filename(file.filename)
+    blob = bucket.blob(f'{codigoHospital}/{codigoEquipo}/{codigoEquipo}.jpg')
+    blob.upload_from_file(file)
+    return jsonify({'message': 'Archivo subido exitosamente'}), 200
+
+
+""" def upload_to_nextcloud(filepath, filename, codigoHospital):
+    nextcloud_url = f'http://{codigoHospital}-server.local/remote.php/dav/files/{user}/EQUIPOS/'
+    nextcloud_user = user
+    nextcloud_password = password
+    with open(filepath, 'rb') as file:
+        response = requests.put(
+            nextcloud_url + filename,
+            data=file,
+            auth=(nextcloud_user, nextcloud_password)
+        )
+    if response.status_code == 201:
+        return True
+    else:
+        print(f"Failed to upload to Nextcloud: {response.status_code} - {response.text}")
+        return False
+ """
+
+
+def serve_image(codigoHospital,filename):
+    storage_client = storage.Client.from_service_account_json(key_file_viewer_path)
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(f'{codigoHospital}/{filename}/{filename}.jpg')
+    url = blob.generate_signed_url(
+        version='v4',
+        expiration=timedelta(minutes=15),
+        method='GET'
+    )
+    return url
+
+
+
+@app.route('/upload_multiple_pdfs/<codigoHospital>/<codigoEquipo>', methods=['POST'])
+def upload_multiple_pdfs(codigoHospital, codigoEquipo):
+    files = request.files.getlist('files')
+    print(request.files)
+
+    if len(files) < 1:
+        return jsonify({"msg": "Se requiere por lo menos un archvio PDF"}), 400
+
+    for file in files:
+        if file.filename == '':
+            print("File has no name")
+            return jsonify({"msg": "Uno de los archivos no tiene nombre"}), 400
+        
+        if not file.filename.lower().endswith('.pdf'):
+            print("File extension is not PDF")
+            return jsonify({"msg": "Todos los archivos deben ser PDFs"}), 400
+
+        filename = secure_filename(file.filename)
+        blob = bucket.blob(f'{codigoHospital}/{codigoEquipo}/{filename}')
+        try:
+            blob.upload_from_file(file)
+        except Exception as e:
+            print("Failed to upload to Google Cloud Storage", str(e))
+            return jsonify({"msg": "Error al subir los PDFs", "error": str(e)}), 500
+
+    return jsonify({"msg": "PDFs subidos exitosamente"}), 200
+@app.route('/HojaVida/<codigoEquipo>/<codigoHospital>', methods=['POST'])
+def hojavida(codigoEquipo, codigoHospital):
+    try:
+        data = request.get_json()
+        db = client[codigoHospital]
+        equipos_collection = db['equipos']
+
+        equipos_collection.update_one(
+                {"codigoIdentificacion": codigoEquipo},
+                {
+                    "$set": { "last_updated": obtener_hora_actual() },
+                    "$push": { "parametrosTecnicos": data }
+                }
+            )
+        return jsonify({"msg": "Hoja de vida actualizada exitosamente"}), 200
+    except Exception as e:
+        return jsonify({"msg": "Error al actualizar la hoja de vida", "error": str(e)}), 500
+
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -280,7 +398,7 @@ def get_profesionales(codigoHospital):
     """
     db = client[codigoHospital]
     usuarios_collection = db['usuarios']
-    profesionales = usuarios_collection.find({"tipo": "profesional"})
+    profesionales = usuarios_collection.find({"tipo": {"$in": ["profesional", "responsableArea"]}})
     result = []
     for profesional in profesionales:
         profesional['_id'] = str(profesional['_id'])
@@ -547,6 +665,7 @@ def create_area():
             "last_updated":obtener_hora_actual(),
             "responsableArea":data["responsableArea"],
             "documentoResponsableArea":data["documentoResponsableArea"],
+            "icono": data["icono"],
         }
         areas_collection.insert_one(Area)
         profesional = users_collection.find_one(
@@ -686,7 +805,7 @@ def get_equipo(codigoIdentificacion, codigoHospital):
         equipos_collection = db['equipos']
         equipo = equipos_collection.find_one({"codigoIdentificacion": codigoIdentificacion})
         if equipo:
-            print(equipo["HojaVida"] )
+            equipo['Imagen'] = serve_image(codigoHospital,equipo["codigoIdentificacion"])
             equipo = convert_objectid(equipo)  # Convert ObjectId to string
             return jsonify(equipo), 200
         else:
@@ -708,14 +827,17 @@ def convert_objectid(data):
 @app.route('/equipo', methods=['POST'])
 def equipo():
     data = request.get_json()
-    hospital = usuarios_collection.find_one({"tipo":"hospital"})
+    db = client[data["codigoHospital"]]
+    equipos_collection = db['equipos']
+    areas_collection = db['areas']
     area = areas_collection.find_one({"nombre": data["area"]})
+    if area is None:
+        return jsonify({"msg": "No se encontró el área"}), 404
+    
     documentoResponsable = area['documentoResponsableArea']
-    codigoEquipo = hospital["codigoIdentificacion"] + "-" + area["codigoIdentificacion"] + "-" + generateCode(4)
-    codigoEquipo = codigoEquipo[5:]
+    codigoEquipo = area["codigoIdentificacion"] + "-" + generateCode(4)
     equipo = {
         "codigoIdentificacion": codigoEquipo,
-        "hospital": hospital['nombre'],
         "area": area["nombre"],
         "documentoResponsableArea": documentoResponsable,
         "Tipo": data.get("tipo"),                       
@@ -728,14 +850,18 @@ def equipo():
         "GuiaRapida":"",
         "Manual": "",
         "Rutinamantenimiento": "",
-        "Imagen": "",
+        "Imagen": codigoEquipo + ".jpg",
         "ReportesCalibracion": "",
         "last_updated":obtener_hora_actual(),
         "RecomendacionesUso": "",
-         "last_updated":obtener_hora_actual(),
     }
+    areas_collection.update_one(
+        {"nombre": data["area"]},
+        {"$push": {"idEquipos": codigoEquipo}}
+    )
     equipos_collection.insert_one(equipo)
-    return jsonify({"msg": "Equipo creado exitosamente"}), 201
+
+    return jsonify({"msg": "Equipo creado exitosamente", "codigoIdentificacion": codigoEquipo}), 201
 
 @app.route('/getequipos/<codigoHospital>/<codigoArea>', methods=['GET'])
 def get_equipos(codigoHospital,codigoArea):
@@ -746,6 +872,7 @@ def get_equipos(codigoHospital,codigoArea):
     equipos = equipos_collection.find({"area": area["nombre"]})
     result = []
     for equipo in equipos:
+        equipo['Imagen'] = serve_image(codigoHospital,equipo["codigoIdentificacion"])
         equipo['_id'] = str(equipo['_id'])
         result.append(equipo)
     return jsonify(result), 200 
@@ -864,9 +991,11 @@ def firmar_mantenimiento(codigoHospital,codigoEquipo,idMantenimiento):
 
 ############## Rutinas ################
 
-@app.route('/preventivo', methods=['POST'])
-def create_preventivo():
+@app.route('/preventivo/<codigoHospital>', methods=['POST'])
+def create_preventivo(codigoHospital):
     data = request.get_json()
+    db = client[codigoHospital]
+    preventivos_collection = db['preventivos']
     hospital_data = usuarios_collection.find_one({"tipo": "hospital"})
     hospital = hospital_data['nombre'] if hospital_data else "Desconocido"
     rutina = {
@@ -1009,4 +1138,7 @@ def getpendientes(codigoHospital, codigoUsuario):
     return jsonify(pendientes), 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', 
+            port=5000, 
+            debug=True
+            )
