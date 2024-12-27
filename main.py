@@ -50,29 +50,29 @@ def generateCodeNumber(num):
 def obtener_hora_actual():
     # Obtener la hora actual en UTC como objeto datetime
     return datetime.now(timezone.utc)
-@app.route("/health")
+@app.route("/health", methods=['GET'])
 def health_check():
-    return "OK", 
-
+    return "OK", 200
 
 def serve_document(codigoHospital, codigoEquipo, filename):
     from google.cloud import storage
     from datetime import timedelta
     storage_client = storage.Client.from_service_account_json(key_file_viewer_path)
     bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(f'{codigoHospital}/{codigoEquipo}/{filename}.pdf')
-
+    blob = bucket.blob(f'{codigoHospital}/{codigoEquipo}/{codigoEquipo}-{filename}.pdf')
+    print(f'{codigoHospital}/{codigoEquipo}/{codigoEquipo}-{filename}.pdf')
     url = blob.generate_signed_url(
         version='v4',
         expiration=timedelta(minutes=15),
         method='GET',
     )
+    print(url)
     return url
 
 @app.route('/document/<codigoHospital>/<codigoEquipo>/<tipoDocumento>', methods=['GET'])
 def document(codigoHospital, codigoEquipo, tipoDocumento):
     if tipoDocumento == "calibracion":
-        filename = codigoEquipo + "-Certificado_de_calibracion"
+        filename = "Certificado_de_calibracion"
         url = serve_document(codigoHospital, codigoEquipo, filename)
         return jsonify({"url": url}), 200
 
@@ -99,12 +99,19 @@ def upload_file(codigoHospital, codigoEquipo):
 
     file = request.files['file']
     if file.filename == '':
-        return jsonify({'error': 'Nombre de archivo inválido'}), 400  
+        return jsonify({'error': 'Nombre de archivo inválido'}), 400
+
+    if not file.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+        return jsonify({'error': 'El archivo debe ser una imagen (JPG, JPEG, PNG)'}), 400
+
     filename = secure_filename(file.filename)
     blob = bucket.blob(f'{codigoHospital}/{codigoEquipo}/{codigoEquipo}.jpg')
-    blob.upload_from_file(file)
-    return jsonify({'message': 'Archivo subido exitosamente'}), 200
+    try:
+        blob.upload_from_file(file, content_type=file.content_type)
+    except Exception as e:
+        return jsonify({'error': f'Error al subir la imagen: {str(e)}'}), 500
 
+    return jsonify({'message': 'Imagen subida exitosamente'}), 200
 
 """ def upload_to_nextcloud(filepath, filename, codigoHospital):
     nextcloud_url = f'http://{codigoHospital}-server.local/remote.php/dav/files/{user}/EQUIPOS/'
@@ -155,7 +162,7 @@ def upload_multiple_pdfs(codigoHospital, codigoEquipo):
             return jsonify({"msg": "Todos los archivos deben ser PDFs"}), 400
 
         filename = secure_filename(file.filename)
-        blob = bucket.blob(f'{codigoHospital}/{codigoEquipo}/{filename}')
+        blob = bucket.blob(f'{codigoHospital}/{codigoEquipo}/{codigoEquipo}-{filename}')
         try:
             blob.upload_from_file(file, content_type='application/pdf')
         except Exception as e:
@@ -749,34 +756,58 @@ def get_all_areas(codigoHospital):
     
     return jsonify(result), 200
 
-@app.route('/createtipo', methods=['POST'])
-def createtipo():
+@app.route('/rutina/<codigoHospital>', methods=['POST'])
+def createtipo(codigoHospital):
     data = request.get_json()
-    tipo = tipos_collection.find_one({"tipo": data['tipo']})
-    if tipo is not None:
-        marca = tipos_collection.find_one({"marca": data['marca']})
-        if marca is not None:
-            modelo = tipos_collection.find_one({"modelo": data['modelo']})
-            if modelo is not None:
-                return jsonify({"msg": "Ya existe un tipo de equipo con iguales caracteristicas"}), 206
+    db = client[codigoHospital]
+    rutinas_collection = db['rutinas']
+    tipoequipo = data["tipoequipo"]
+    marca = data["marca"]
+    modelo = data["modelo"]
+    preguntas = data["preguntas"]
+    rutina = rutinas_collection.find_one({"tipo": tipoequipo, "marca": marca, "modelo": modelo})
+    if rutina is not None:
+        return jsonify({"msg": "Ese equipo ya tiene una rutina"}), 206
     else:
-        Tipo = {
-            "tipo": data['tipo'],
-            "marca": data['marca'],
-            "modelo": data['modelo'],
-            "preguntas": [],
+        rutina = {
+            "hospital": codigoHospital,
+            "tipo": tipoequipo,
+            "marca": marca,
+            "modelo": modelo,
+            "preguntas": preguntas,
             "last_updated":obtener_hora_actual(),
         }
-        tipos_collection.insert_one(Tipo)        
+        rutinas_collection.insert_one(rutina)
+
+       
     return jsonify({"msg": "Tipo creado"}), 201
 
+@app.route('/preventivo/<codigoHospital>', methods=['POST'])
+def create_preventivo(codigoHospital):
+    data = request.get_json()
+    db = client[codigoHospital]
+    preventivos_collection = db['preventivos']
+    hospital_data = usuarios_collection.find_one({"tipo": "hospital"})
+    hospital = hospital_data['nombre'] if hospital_data else "Desconocido"
+    rutina = {
+        "hospital": hospital,
+        "tipoequipo": data.get('tipoequipo'),
+        "modelo": data.get('modelo'),
+        "marca": data.get('marca'),
+        "preguntas": data.get('preguntas', []),
+        "last_updated":obtener_hora_actual(),
+    }
+    preventivos_collection.insert_one(rutina)
+    return jsonify({"msg": "Rutina creada exitosamente"}), 201
 
-@app.route('/getmarcas/<tipo>', methods=['GET'])
-def getmarcas(tipo):
-    """
+@app.route('/marcas/<tipo>/<codigoHospital>', methods=['GET'])
+def getmarcas(tipo, codigoHospital):
+    """-
     Ruta para obtener todos los tipos de equipos.
     """
-    coincidentes = tipos_collection.find({"tipo": tipo}, {"marca": 1, "_id": 0})
+    db = client[codigoHospital]
+    rutinas_collection = db['rutinas']
+    coincidentes = rutinas_collection.find({"tipo": tipo}, {"marca": 1, "_id": 0})
     result = []
     if coincidentes is None:
         return jsonify({"msg": "No se encontraron marcas para este tipo"}), 404
@@ -787,25 +818,32 @@ def getmarcas(tipo):
         return jsonify(result), 200
 
 
-@app.route('/gettipos', methods=['GET'])
-def get_tipos():
+@app.route('/tipos/<codigoHospital>', methods=['GET'])
+def get_tipos(codigoHospital):
+    db = client[codigoHospital]
     """
     Ruta para obtener todos los tipos de equipos.
     """
-    tipos = tipos_collection.find()  # Fetch all areas from the collection
+    rutinas_collection = db['rutinas']
+    tipos = rutinas_collection.find()  # Fetch all areas from the collection
+    print(tipos)
     result = []
     for tipo in tipos:
         tipo = tipo['tipo']
         if tipo not in result:
             result.append(tipo)
+            print("Estos son los tips",result)
     return jsonify(result), 200
 
-@app.route('/getmodelos/<tipo>/<marca>', methods=['GET'])
-def get_modelos(tipo, marca):
+@app.route('/modelos/<tipo>/<marca>/<codigoHospital>', methods=['GET'])
+def get_modelos(tipo, marca, codigoHospital):
     """
     Ruta para obtener todos los tipos de equipos.
     """
-    modeloscoincidentes = tipos_collection.find({"tipo": tipo, "marca": marca}, {"modelo": 1, "_id": 0})
+    db = client[codigoHospital]
+    rutinas_collection = db['rutinas']
+
+    modeloscoincidentes = rutinas_collection.find({"tipo": tipo, "marca": marca}, {"modelo": 1, "_id": 0})
     result = []
     for modelo in modeloscoincidentes:
         modelo = modelo['modelo']
@@ -856,20 +894,17 @@ def update_responsable_area(codigo):
 ############### Areas Final #######################
 
 ############### Equipos #######################
-@app.route('/getequipo/<codigoHospital>/<codigoIdentificacion>', methods=['GET'])
+@app.route('/equipo/<codigoHospital>/<codigoIdentificacion>', methods=['GET'])
 def get_equipo(codigoIdentificacion, codigoHospital):
-    try:
-        db = client[codigoHospital]
-        equipos_collection = db['equipos']
-        equipo = equipos_collection.find_one({"codigoIdentificacion": codigoIdentificacion})
-        if equipo:
-            equipo['Imagen'] = serve_image(codigoHospital,equipo["codigoIdentificacion"])
-            equipo = convert_objectid(equipo)  # Convert ObjectId to string
-            return jsonify(equipo), 200
-        else:
-            return jsonify({"error": "Equipo no encontrado"}), 404
-    except Exception as e:
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+    db = client[codigoHospital]
+    equipos_collection = db['equipos']
+    print(codigoIdentificacion, codigoHospital)
+    equipo = equipos_collection.find_one({"codigoIdentificacion": codigoIdentificacion})
+    if not equipo:
+        return jsonify({"error": "Equipo no encontrado"}), 404
+    else:
+        equipo['_id'] = str(equipo['_id'])
+        return jsonify(equipo), 200
 
 def convert_objectid(data):
     """ Recursively convert ObjectId to string in a MongoDB document """
@@ -1079,29 +1114,12 @@ def firmar_mantenimiento(codigoHospital,codigoEquipo,idMantenimiento):
 
 ############## Rutinas ################
 
-@app.route('/preventivo/<codigoHospital>', methods=['POST'])
-def create_preventivo(codigoHospital):
-    data = request.get_json()
-    db = client[codigoHospital]
-    preventivos_collection = db['preventivos']
-    hospital_data = usuarios_collection.find_one({"tipo": "hospital"})
-    hospital = hospital_data['nombre'] if hospital_data else "Desconocido"
-    rutina = {
-        "hospital": hospital,
-        "tipoequipo": data.get('tipoequipo'),
-        "modelo": data.get('modelo'),
-        "marca": data.get('marca'),
-        "preguntas": data.get('preguntas', []),
-        "last_updated":obtener_hora_actual(),
-    }
-    preventivos_collection.insert_one(rutina)
-    return jsonify({"msg": "Rutina creada exitosamente"}), 201
 
 @app.route('/preventivo/<tipoequipo>/<marca>/<modelo>', methods=['GET'])
 def get_preventivo(tipoequipo, marca, modelo):
     db = client['GCIW']
-    preventivos_collection = db['preventivos']
-    preventivo = preventivos_collection.find_one({"tipoequipo": tipoequipo, "marca": marca, "modelo": modelo})
+    rutinas_collection = db['rutinas']
+    preventivo = rutinas_collection.find_one({"tipo": tipoequipo, "marca": marca, "modelo": modelo})
     if preventivo is not None:
         rutina = {
             "preguntas": preventivo.get('preguntas', []),
