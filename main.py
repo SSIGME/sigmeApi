@@ -205,11 +205,13 @@ def login():
 
     if user and check_password_hash(user['contrasena'], data['contrasena']):
         print(check_password_hash(user['contrasena'], data['contrasena']))
-        access_token = create_access_token(identity={
-            "id": str(user['_id']),
-            "tipo": user["tipo"],
-            "hospital": user['hospital']
-        })
+        access_token = create_access_token(
+        identity=json.dumps({
+        "id": str(user['_id']),
+        "tipo": user["tipo"],
+        "hospital": user['hospital']
+    })
+)
         return jsonify({
             "access_token": access_token,
             "tipo": user["tipo"],
@@ -220,61 +222,51 @@ def login():
         return jsonify({"msg": "Usuario o contraseña incorrectos o no tiene permisos de administrador"}), 401
 
 
-#[.]
+
 
 @app.route('/login/code', methods=['POST'])
 def logincode():
     """
     Ruta para iniciar sesión.
-    Se envía un JSON con 'codigo' y 'codigoHospital'.
+    Se envía un JSON con 'codigo' y 'documento'.
     """
-    try:
-        # Obtener datos de la solicitud
-        data = request.get_json()
-        print("Datos recibidos:", data)
-
-        # Validar campos requeridos
-        required_fields = ['codigo', 'codigoHospital', 'tipo']
-        for field in required_fields:
-            if field not in data:
-                return jsonify({"msg": f"El campo '{field}' es obligatorio"}), 400
-
-        # Conectar con la base de datos del hospital
-        db = client[data["codigoHospital"]]
-        usuarios_collection = db['usuarios']
-
-        # Buscar al usuario con los criterios dados
-        user = usuarios_collection.find_one({
-            "estado": True,
-            "codigo": data['codigo'],
-            "tipo": data['tipo']
+    data = request.get_json()
+    print(data)
+    
+    # Obtener la base de datos correspondiente según el hospital
+    db = client[data["codigoHospital"]]
+    usuarios_collection = db['usuarios']
+    
+    # Buscar al usuario con los datos proporcionados
+    user = usuarios_collection.find_one({
+        "estado": True,
+        "codigo": data['codigo'],
+        "tipo": data['tipo']
+    })
+    
+    if user:
+        # Serializar los datos del usuario a JSON
+        user_data = json.dumps({
+            "id": str(user['_id']),
+            "tipo": user["tipo"],
+            "codigo": user["codigo"],
+            "hospital": user["hospital"],
+            "nombre": user["nombre"]
         })
+        
+        # Crear el token con el objeto serializado en `identity`
+        response = {
+            "access_token": create_access_token(
+                identity=user_data  # Se pasa el objeto serializado como cadena JSON
+            ),
+            "firmaEstado": user.get("firmaEstado")  # Obtener firmaEstado del usuario
+        }
 
-        # Verificar si el usuario existe
-        if user:
-            # Generar el token de acceso
-            access_token = create_access_token(identity=json.dumps({
-                "id": str(user['_id']),
-                "tipo": user["tipo"],
-                "codigo": user["codigo"],
-                "hospital": user['hospital'],
-                "nombre": user["nombre"]
-            }))
-            # Serializar la respuesta completa con json.dumps
-            response = {
-                "access_token": access_token,
-                "firmaEstado": user.get("firmaEstado", None)
-            }
+        return jsonify(response), 200
+    else:
+        return jsonify({"msg": "Usuario o contraseña incorrectos"}), 401
 
-            # Enviar respuesta serializada
-            return jsonify(response), 200
-        else:
-            return jsonify({"msg": "Usuario no encontrado o estado no válido"}), 401
 
-    except Exception as e:
-        # Capturar errores inesperados
-        print(f"Error interno: {str(e)}")
-        return jsonify({"msg": "Error interno del servidor"}), 500
 @app.route('/protected/<tipo>', methods=['GET'])
 @jwt_required()
 def protected_route(tipo):
