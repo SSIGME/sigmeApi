@@ -15,7 +15,6 @@ import requests
 import os 
 import socket
 
-
 bucket_name = 'sigme-resources'
 key_file_uploader_path = "uploader_images.json"
 key_file_viewer_path = "userviewer.json"
@@ -27,16 +26,13 @@ a='Cxv24KPcpogXnqgpDAXFerewrf'
 app.config['JWT_SECRET_KEY'] = 'Cxv24KPcpogXnqgpDAXF'
 jwt = JWTManager(app)
 client = MongoClient('mongodb+srv://ssigmeapp:3F0L4qnW6Hgdd2x4@sigmedataserver.okzbeur.mongodb.net/?retryWrites=true&w=majority&appName=sigmeDataServer')
-db = client['ISAK']
 user = 'userhospital'
 password = 'Thegostmane1!'
+db = client['ISAK']
 usuarios_collection = db['usuarios']
 equipos_collection = db['equipos']
 tipos_collection = db['tipos']
 areas_collection = db['areas']
-preventivos_collection = db['preventivos']
-correctivos_collection = db['correctivos']
-mantenimientos_collection = db['mantenimientos']
 
 
 def generateCode(num):
@@ -141,6 +137,8 @@ def serve_image(codigoHospital,filename):
         method='GET'
     )
     return url
+
+
 
 
 
@@ -416,39 +414,46 @@ def create_tecnico():
         }
         usuarios_collection.insert_one(tecnico_data)
         return jsonify({"msg": "Técnico creado exitosamente"}), 201
+
 @app.route('/profesional', methods=['POST'])
+@jwt_required()
 def create_profesional():
     """
     Ruta para crear un usuario Profesional.
-    Se envía un JSON con 'codigo', 'nombre', 'estado', 'hospital', 'fechaCreacion', 'fechaExpiracion', 'tipoProfesional'.
+    Se envía un JSON con 'nombre', 'fechaExpiracion', 'empresa', 'documento', 'codigoHospital', 'fechaExpiracionEstado'.
     """
-
     data = request.get_json()
+    db = client[data["codigoHospital"]]
+    usuarios_collection = db['usuarios']
     existing_user = usuarios_collection.find_one({"documento": data['documento']})
-    hospital = usuarios_collection.find_one({"tipo":"hospital"})
+    hospital = usuarios_collection.find_one({"tipo": "hospital"})
     code = hospital["codigoIdentificacion"] + "-" + generateCode(6)
+    
     if existing_user:
         return jsonify({"msg": "Ya existe un usuario con ese documento"}), 400
     
-    hospital_user = usuarios_collection.find_one({"tipo": "hospital"})
-    if not hospital_user:
+    if not hospital:
         return jsonify({"msg": "No se encontró el hospital"}), 404
+    
     profesional_data = {
         "codigo": code,
         "nombre": data['nombre'],
         "documento": data['documento'],
-        "estado": data['estado'],
+        "estado": data['fechaExpiracionEstado'],
         "hospital": hospital['nombre'],
-        "fechaCreacion": data['fechaCreacion'],
+        "fechaCreacion": obtener_hora_actual(),
         "fechaExpiracion": data['fechaExpiracion'],
-        "tipo": data['profesional'],
-        "last_updated":obtener_hora_actual(),
+        "empresa": data['empresa'],
+        "tipo": "profesional",
+        "last_updated": obtener_hora_actual(),
     }
+    
     usuarios_collection.insert_one(profesional_data)
     return jsonify({"msg": "Profesional creado exitosamente"}), 201
 
 
-@app.route('/getprofesionales/<codigoHospital>', methods=['GET'])
+@app.route('/profesionales/<codigoHospital>', methods=['GET'])
+@jwt_required()
 def get_profesionales(codigoHospital):
     """
     Ruta para obtener todos los profesionales.
@@ -500,37 +505,58 @@ def create_encargado():
 @app.route('/hospital', methods=['POST'])
 def create_hospital():
     """
-    Ruta para crear un usuario Encargado.
-    Se envía un JSON con 'codigo', 'nombre', 'estado', 'hospital', 'fechaCreacion', 'fechaExpiracion', 'tipoEncargado'.
+    Ruta para crear un hospital y un usuario administrador.
+    Se envía un JSON con los datos del hospital y del administrador.
     """
     data = request.get_json()
-    existing_user = usuarios_collection.find_one({"documento": data['documento']})
-    if existing_user:
-        return jsonify({"msg": "Ya existe un usuario con ese documento"}), 400
 
+    # Validar que el código del hospital está presente
+    if 'codigo' not in data:
+        return jsonify({"error": "El campo 'codigo' es obligatorio"}), 400
+
+    # Usar el código del hospital para nombrar la base de datos
+    hospital_db_name = data['codigo']
+    db = client[hospital_db_name]  # Crear/seleccionar la base de datos
+    usuarios_collection = db['usuarios']  # Crear/seleccionar la colección de usuarios
+
+    # Datos del hospital a insertar
     hospital_data = {
         "nombre": data['nombre'],
         "hospital": "hospital",
         "fechaCreacion": data['fechaCreacion'],
         "fechaExpiracion": data['fechaExpiracion'],
-        "tipo": data['hospital'],
-        "dias": data['dias'],
-        "codigoIdentificaion":generateCode(4),
-        "numeroEquipos": data['numeroEquipos'],
-        "numeroAreas": data['numeroAreas'],
+        "tipo": "hospital",
+        "codigoIdentificacion": 'PALM',
+        "numeroEquipos": 0,
+        "numeroAreas": 0,
         "correoContacto": data['correoContacto'],
         "direccion": data['direccion'],
-        "imagen":  data["imagen"],
+        "imagen": data["imagen"],
         "telefono": data['telefono'],
-        "proximaVisita": data['proximaVisita'],
-        "ultimaVisita": data['ultimaVisita'],
+        "departamento": data['departamento'],
+        "ciudad": data['ciudad'],
+        "proximaVisita": '',
+        "ultimaVisita": '',
         "responsableMantenimiento": data['responsableMantenimiento'],
         "estadoLicencia": True,
-        "last_updated":obtener_hora_actual()
+        "last_updated": obtener_hora_actual()
     }
-    usuarios_collection.insert_one(hospital_data)
-    return jsonify({"msg": "Encargado creado exitosamente"}), 201
 
+    # Datos del administrador a insertar
+    admin_data = {
+        "nombre": data['nombreAdministrador'],
+        "contrasena": generate_password_hash(data['contrasenaAdministrador']),
+        "documento": data['documento'],
+        "tipo": "administrador",
+        "hospital": data['nombre'],
+        "last_updated": obtener_hora_actual()
+    }
+
+    # Insertar datos en la colección de usuarios
+    usuarios_collection.insert_one(hospital_data)
+    usuarios_collection.insert_one(admin_data)
+
+    return jsonify({"msg": f"Base de datos '{hospital_db_name}' y usuario administrador creados exitosamente"}), 201
 ### Obtener datos hospital
 @app.route('/hospital/<codigoHospital>', methods=['GET'])
 def get_hospital(codigoHospital):
@@ -896,6 +922,7 @@ def get_equipo(codigoIdentificacion, codigoHospital):
         return jsonify({"error": "Equipo no encontrado"}), 404
     else:
         equipo['_id'] = str(equipo['_id'])
+        equipo['Imagen'] = serve_image(codigoHospital, codigoIdentificacion)
         return jsonify(equipo), 200
 
 def convert_objectid(data):
@@ -958,6 +985,7 @@ def get_equipos(codigoHospital,codigoArea):
     result = []
     for equipo in equipos:
         equipo['Imagen'] = serve_image(codigoHospital,equipo["codigoIdentificacion"])
+        print(equipo)
         equipo['_id'] = str(equipo['_id'])
         result.append(equipo)
     return jsonify(result), 200 
@@ -1196,10 +1224,7 @@ def obtener_reportes(codigoHospital):
     db = client[codigoHospital]  # Nombre de la base de datos
     reportes_collection = db["reportes"]
     try:
-
         reportes = list(reportes_collection.find())
-
-
         for reporte in reportes:
             reporte['_id'] = str(reporte['_id'])
 
@@ -1207,6 +1232,7 @@ def obtener_reportes(codigoHospital):
     except Exception as e:
         print("Error al obtener los reportes:", e)
         return jsonify({"error": "Hubo un error al obtener los reportes"}), 500
+
 @app.route('/finished_mantenimiento/<codigoHospital>/<codigoEquipo>/<idMantenimiento>', methods=['GET'])
 @jwt_required()
 def get_finished_mantenimiento(codigoHospital, codigoEquipo, idMantenimiento):
