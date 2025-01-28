@@ -1,4 +1,6 @@
 import json
+from urllib.parse import quote
+
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from bson import ObjectId
@@ -71,6 +73,25 @@ def document(codigoHospital, codigoEquipo, tipoDocumento):
         filename = "Certificado_de_calibracion"
         url = serve_document(codigoHospital, codigoEquipo, filename)
         return jsonify({"url": url}), 200
+    if tipoDocumento == "Guia_Rapida":
+        filename = "Guia_Rapida"
+        url = serve_document(codigoHospital, codigoEquipo, filename)
+        return jsonify({"url": url}), 200
+    if tipoDocumento == "Plan_Mantenimiento":
+        filename = "Plan_Mantenimiento"
+        url = serve_document(codigoHospital, codigoEquipo, filename)
+        return jsonify({"url": url}), 200
+    if tipoDocumento == "Manual":
+        filename = "Manual_De_Uso"
+        url = serve_document(codigoHospital, codigoEquipo, filename)
+        return jsonify({"url": url}), 200
+    if tipoDocumento == "Limpieza":
+        filename = "Protocolo_Limpieza"
+        url = serve_document(codigoHospital, codigoEquipo, filename)
+        return jsonify({"url": url}), 200
+    else:
+        return jsonify({"msg": "Tipo de documento no válido"}), 400
+
 
 
 @app.route('/delete/equipo/<codigoHospital>/<codigoEquipo>', methods=['DELETE'])
@@ -78,6 +99,9 @@ def delete_equipo(codigoHospital, codigoEquipo):
     db = client[codigoHospital]
     equipos_collection = db['equipos']
     areas_collection = db['areas']
+    usuarios_collection = db['usuarios']
+    hospital = usuarios_collection.find_one({"tipo": "hospital"})
+    hospital['numeroEquipos'] -= 1
     equipo = equipos_collection.find_one({"codigoIdentificacion": codigoEquipo})
     if not equipo:
         return jsonify({"msg": "Equipo no encontrado"}), 404
@@ -137,10 +161,6 @@ def serve_image(codigoHospital,filename):
         method='GET'
     )
     return url
-
-
-
-
 
 @app.route('/upload_multiple_pdfs/<codigoHospital>/<codigoEquipo>', methods=['POST'])
 def upload_multiple_pdfs(codigoHospital, codigoEquipo):
@@ -248,7 +268,7 @@ def logincode():
             "id": str(user['_id']),
             "tipo": user["tipo"],
             "codigo": user["codigo"],
-            "hospital": user["hospital"],
+            "hospital": data["codigoHospital"],  # Almacenar el codigoHospital
             "nombre": user["nombre"]
         })
         
@@ -333,6 +353,7 @@ def get_firma():
     db = client[user["hospital"]]
     usuarios_collection = db['usuarios']
     codigouser = user["codigo"]
+    print(user)
     usuario = usuarios_collection.find_one({"codigo": codigouser})
     if usuario:
         return jsonify({"firma": usuario['firma']}), 200
@@ -570,7 +591,7 @@ def get_hospital(codigoHospital):
         return jsonify({"msg": "No se encontró un hospital con ese tipo"}), 404
     else:
         hospital['_id'] = str(hospital['_id'])
-        
+        hospital['imagen'] = serve_image(codigoHospital, "hospital")
         return jsonify(hospital), 200
 
 
@@ -804,7 +825,7 @@ def createtipo(codigoHospital):
 def create_preventivo(codigoHospital):
     data = request.get_json()
     db = client[codigoHospital]
-    preventivos_collection = db['preventivos']
+    rutinas_collection = db['rutinas']
     hospital_data = usuarios_collection.find_one({"tipo": "hospital"})
     hospital = hospital_data['nombre'] if hospital_data else "Desconocido"
     rutina = {
@@ -815,7 +836,7 @@ def create_preventivo(codigoHospital):
         "preguntas": data.get('preguntas', []),
         "last_updated":obtener_hora_actual(),
     }
-    preventivos_collection.insert_one(rutina)
+    rutinas_collection.insert_one(rutina)
     return jsonify({"msg": "Rutina creada exitosamente"}), 201
 
 @app.route('/marcas/<tipo>/<codigoHospital>', methods=['GET'])
@@ -945,7 +966,10 @@ def equipo():
     area = areas_collection.find_one({"nombre": data["area"]})
     if area is None:
         return jsonify({"msg": "No se encontró el área"}), 404
-    
+    hospital = usuarios_collection.find_one({"tipo": "hospital"})
+    if not hospital:
+        return jsonify({"msg": "No se encontró el hospital"}), 404
+    hospital['numeroEquipos'] += 1
     documentoResponsable = area['documentoResponsableArea']
     codigoEquipo = area["codigoIdentificacion"] + "-" + generateCode(4)
     equipo = {
@@ -1146,7 +1170,7 @@ def get_preventivo(tipoequipo, marca, modelo):
         }
         return jsonify(rutina), 200
     else:
-        preventivo = preventivos_collection.find_one({"tipoequipo": {"$regex": f'^{tipoequipo}$', "$options": "i"}, "marca": "GENERAL"})
+        preventivo = rutinas_collection.find_one({"tipo": {"$regex": f'^{tipoequipo}$', "$options": "i"}, "marca": "GENERAL"})
         if preventivo is not None:
             del preventivo['_id'], preventivo['tipoequipo'], preventivo['marca'], preventivo['modelo'], preventivo['hospital']
             return jsonify(preventivo), 200
@@ -1157,6 +1181,8 @@ def get_preventivo(tipoequipo, marca, modelo):
 @app.route('/correctivo', methods=['POST'])
 def create_correctivo():
     data = request.get_json()
+    db = client[data["codigoHospital"]]
+    rutinas = db['rutinas']
     hospital_data = usuarios_collection.find_one({"tipo": "hospital"})
     hospital = hospital_data['nombre'] if hospital_data else "Desconocido"
     rutina = {
@@ -1167,12 +1193,14 @@ def create_correctivo():
         "preguntas": data.get('preguntas', []),
         "last_updated":obtener_hora_actual(),
     }
-    correctivos_collection.insert_one(rutina)
+    rutinas.insert_one(rutina)
     return jsonify({"msg": "Rutina creada exitosamente"}), 201
 
 @app.route('/correctivo/<tipoequipo>/<marca>/<modelo>', methods=['GET'])
 def get_correctivo(tipoequipo, marca, modelo):
-    correctivo = correctivos_collection.find_one({"tipoequipo": tipoequipo, "marca": marca, "modelo": modelo})
+    db = client['GCIW']
+    rutinas_collection = db['rutinas']
+    correctivo = rutinas_collection.find_one({"tipoequipo": tipoequipo, "marca": marca, "modelo": modelo, "tipo_mantenimiento": "correctivo"})
     if correctivo is not None:
         del correctivo['_id'], correctivo['tipoequipo'], correctivo['marca'], correctivo['modelo'], correctivo['hospital']
         for pregunta in correctivo.get('preguntas', []):
@@ -1182,7 +1210,7 @@ def get_correctivo(tipoequipo, marca, modelo):
                 pregunta['opciones'] = ""  # Establece un arreglo vacío si no hay opciones
         return jsonify(correctivo), 200
     else:
-        correctivo = correctivos_collection.find_one({"tipoequipo": {"$regex": f'^{tipoequipo}$', "$options": "i"}, "marca": "GENERAL"})
+        correctivo = rutinas_collection.find_one({"tipoequipo": {"$regex": f'^{tipoequipo}$', "$options": "i"}, "marca": "GENERAL"})
         if correctivo is not None:
             del correctivo['_id'], correctivo['tipoequipo'], correctivo['marca'], correctivo['modelo'], correctivo['hospital']
             return jsonify(correctivo), 200
