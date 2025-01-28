@@ -1,4 +1,5 @@
 import json
+from urllib.parse import quote
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from bson import ObjectId
@@ -15,11 +16,6 @@ import requests
 import os 
 import socket
 
-bucket_name = 'sigme-resources'
-key_file_uploader_path = "uploader_images.json"
-key_file_viewer_path = "userviewer.json"
-storage_client = storage.Client.from_service_account_json(key_file_uploader_path)
-bucket = storage_client.bucket(bucket_name)
 app = Flask(__name__)
 CORS(app)
 a='Cxv24KPcpogXnqgpDAXFerewrf'
@@ -33,6 +29,10 @@ usuarios_collection = db['usuarios']
 equipos_collection = db['equipos']
 tipos_collection = db['tipos']
 areas_collection = db['areas']
+UPLOAD_FOLDER = '/home/server/LocalImagesAndDocuments'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+UPLOAD_ROOT = '/home/server/LocalImagesAndDocuments'
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # Máximo tamaño de archivo: 16MB
 
 
 def generateCode(num):
@@ -50,20 +50,20 @@ def obtener_hora_actual():
 def health_check():
     return "OK", 200
 
+
 def serve_document(codigoHospital, codigoEquipo, filename):
-    from google.cloud import storage
-    from datetime import timedelta
-    storage_client = storage.Client.from_service_account_json(key_file_viewer_path)
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(f'{codigoHospital}/{codigoEquipo}/{codigoEquipo}-{filename}.pdf')
-    print(f'{codigoHospital}/{codigoEquipo}/{codigoEquipo}-{filename}.pdf')
-    url = blob.generate_signed_url(
-        version='v4',
-        expiration=timedelta(minutes=15),
-        method='GET',
-    )
-    print(url)
-    return url
+    # Ruta local donde se encuentran los PDFs
+    base_url = 'http://sigme-server.local'
+    local_file_path = f'{base_url}/{codigoHospital}/{codigoEquipo}/{codigoEquipo}-{filename}.pdf'
+    file_in_server = f'/home/server/LocalImagesAndDocuments/{codigoHospital}/{codigoEquipo}/{codigoEquipo}-{filename}.pdf'
+    print(f"Local file path: {local_file_path}")
+    if not os.path.exists(file_in_server):
+        return None
+    try:
+        return local_file_path
+    except Exception as e:
+        print(f"Error al servir el archivo local: {str(e)}")
+        return None
 
 @app.route('/document/<codigoHospital>/<codigoEquipo>/<tipoDocumento>', methods=['GET'])
 def document(codigoHospital, codigoEquipo, tipoDocumento):
@@ -71,6 +71,24 @@ def document(codigoHospital, codigoEquipo, tipoDocumento):
         filename = "Certificado_de_calibracion"
         url = serve_document(codigoHospital, codigoEquipo, filename)
         return jsonify({"url": url}), 200
+    if tipoDocumento == "Guia_Rapida":
+        filename = "Guia_Rapida"
+        url = serve_document(codigoHospital, codigoEquipo, filename)
+        return jsonify({"url": url}), 200
+    if tipoDocumento == "Plan_Mantenimiento":
+        filename = "Plan_Mantenimiento"
+        url = serve_document(codigoHospital, codigoEquipo, filename)
+        return jsonify({"url": url}), 200
+    if tipoDocumento == "Manual":
+        filename = "Manual_De_Uso"
+        url = serve_document(codigoHospital, codigoEquipo, filename)
+        return jsonify({"url": url}), 200
+    if tipoDocumento == "Limpieza":
+        filename = "Protocolo_Limpieza"
+        url = serve_document(codigoHospital, codigoEquipo, filename)
+        return jsonify({"url": url}), 200
+    else:
+        return jsonify({"msg": "Tipo de documento no válido"}), 400
 
 
 @app.route('/delete/equipo/<codigoHospital>/<codigoEquipo>', methods=['DELETE'])
@@ -89,55 +107,53 @@ def delete_equipo(codigoHospital, codigoEquipo):
     return jsonify({"msg": "Equipo eliminado exitosamente"}), 200
 
 @app.route('/upload_image/<codigoHospital>/<codigoEquipo>', methods=['POST'])
-def upload_file(codigoHospital, codigoEquipo):
+def upload_image(codigoHospital, codigoEquipo):
+    # Verifica si el archivo está presente en la solicitud
     if 'file' not in request.files:
         return jsonify({'error': 'No se proporcionó ningún archivo'}), 400
 
     file = request.files['file']
+
+    # Verifica si el nombre del archivo es válido
     if file.filename == '':
         return jsonify({'error': 'Nombre de archivo inválido'}), 400
 
+    # Verifica si el archivo tiene una extensión permitida
     if not file.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
         return jsonify({'error': 'El archivo debe ser una imagen (JPG, JPEG, PNG)'}), 400
 
+    # Asegura que el nombre del archivo sea seguro
     filename = secure_filename(file.filename)
-    blob = bucket.blob(f'{codigoHospital}/{codigoEquipo}/{codigoEquipo}.jpg')
+
+    # Construye la ruta para guardar el archivo
+    upload_path = os.path.join(UPLOAD_ROOT, codigoHospital, codigoEquipo)
+
+    # Crea la carpeta si no existe
+    os.makedirs(upload_path, exist_ok=True)
+
+    # Ruta final del archivo
+    file_path = os.path.join(upload_path, f'{codigoEquipo}.jpg')
+
     try:
-        blob.upload_from_file(file, content_type=file.content_type)
+        # Guarda el archivo en el servidor
+        file.save(file_path)
     except Exception as e:
-        return jsonify({'error': f'Error al subir la imagen: {str(e)}'}), 500
+        return jsonify({'error': f'Error al guardar el archivo: {str(e)}'}), 500
 
-    return jsonify({'message': 'Imagen subida exitosamente'}), 200
+    return jsonify({'message': 'Imagen subida exitosamente', 'path': file_path}), 200
 
-""" def upload_to_nextcloud(filepath, filename, codigoHospital):
-    nextcloud_url = f'http://{codigoHospital}-server.local/remote.php/dav/files/{user}/EQUIPOS/'
-    nextcloud_user = user
-    nextcloud_password = password
-    with open(filepath, 'rb') as file:
-        response = requests.put(
-            nextcloud_url + filename,
-            data=file,
-            auth=(nextcloud_user, nextcloud_password)
-        )
-    if response.status_code == 201:
-        return True
-    else:
-        print(f"Failed to upload to Nextcloud: {response.status_code} - {response.text}")
-        return False
- """
+def serve_image(codigoHospital, filename):
+    # Carpeta base donde NGINX sirve los archivos
+    base_url = 'http://sigme-server.local'
 
+    # Construye la ruta del archivo en el servidor
+    file_path = os.path.join(codigoHospital, filename, f'{filename}.jpg')
 
-def serve_image(codigoHospital,filename):
-    storage_client = storage.Client.from_service_account_json(key_file_viewer_path)
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(f'{codigoHospital}/{filename}/{filename}.jpg')
-    url = blob.generate_signed_url(
-        version='v4',
-        expiration=timedelta(minutes=15),
-        method='GET'
-    )
-    return url
-
+    # Codifica correctamente el nombre de archivo y la carpeta para evitar problemas con espacios o caracteres especiales
+    file_path_encoded = quote(file_path)
+    print(f"{base_url}/{file_path_encoded}")
+    # Devuelve la URL completa para acceder a la imagen
+    return f"{base_url}/{file_path_encoded}"
 
 
 
@@ -148,26 +164,35 @@ def upload_multiple_pdfs(codigoHospital, codigoEquipo):
     print(request.files)
 
     if len(files) < 1:
-        return jsonify({"msg": "Se requiere por lo menos un archvio PDF"}), 400
+        return jsonify({"msg": "Se requiere por lo menos un archivo PDF"}), 400
 
     for file in files:
         if file.filename == '':
             print("File has no name")
             return jsonify({"msg": "Uno de los archivos no tiene nombre"}), 400
-        
-        if not file.filename.lower().endswith('.pdf'):
+
+        if not allowed_file(file.filename):
             print("File extension is not PDF")
             return jsonify({"msg": "Todos los archivos deben ser PDFs"}), 400
 
         filename = secure_filename(file.filename)
-        blob = bucket.blob(f'{codigoHospital}/{codigoEquipo}/{codigoEquipo}-{filename}')
-        try:
-            blob.upload_from_file(file, content_type='application/pdf')
-        except Exception as e:
-            print("Failed to upload to Google Cloud Storage", str(e))
-            return jsonify({"msg": "Error al subir los PDFs", "error": str(e)}), 500
 
-    return jsonify({"msg": "PDFs subidos exitosamente"}), 200
+        # Crear la ruta completa para guardar el archivo localmente
+        local_file_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{codigoHospital}/{codigoEquipo}/{codigoEquipo}-{filename}')
+
+        # Crear directorios si no existen
+        os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+
+        # Guardar el archivo localmente
+        try:
+            file.save(local_file_path)
+            print(f"Archivo guardado en: {local_file_path}")
+        except Exception as e:
+            print("Error al guardar el archivo localmente", str(e))
+            return jsonify({"msg": "Error al guardar los archivos en el servidor", "error": str(e)}), 500
+
+    return jsonify({"msg": "PDFs subidos exitosamente al servidor"}), 200
+
 @app.route('/HojaVida/<codigoEquipo>/<codigoHospital>', methods=['POST'])
 def hojavida(codigoEquipo, codigoHospital):
     try:
@@ -248,7 +273,7 @@ def logincode():
             "id": str(user['_id']),
             "tipo": user["tipo"],
             "codigo": user["codigo"],
-            "hospital": user["hospital"],
+            "hospital": data["codigoHospital"],  # Almacenar el codigoHospital
             "nombre": user["nombre"]
         })
         
@@ -570,7 +595,7 @@ def get_hospital(codigoHospital):
         return jsonify({"msg": "No se encontró un hospital con ese tipo"}), 404
     else:
         hospital['_id'] = str(hospital['_id'])
-        
+        hospital['imagen'] = serve_image(codigoHospital, "hospital")
         return jsonify(hospital), 200
 
 
@@ -804,7 +829,7 @@ def createtipo(codigoHospital):
 def create_preventivo(codigoHospital):
     data = request.get_json()
     db = client[codigoHospital]
-    preventivos_collection = db['preventivos']
+    rutinas_collection = db['rutinas']
     hospital_data = usuarios_collection.find_one({"tipo": "hospital"})
     hospital = hospital_data['nombre'] if hospital_data else "Desconocido"
     rutina = {
@@ -815,7 +840,7 @@ def create_preventivo(codigoHospital):
         "preguntas": data.get('preguntas', []),
         "last_updated":obtener_hora_actual(),
     }
-    preventivos_collection.insert_one(rutina)
+    rutinas_collection.insert_one(rutina)
     return jsonify({"msg": "Rutina creada exitosamente"}), 201
 
 @app.route('/marcas/<tipo>/<codigoHospital>', methods=['GET'])
@@ -1146,7 +1171,7 @@ def get_preventivo(tipoequipo, marca, modelo):
         }
         return jsonify(rutina), 200
     else:
-        preventivo = preventivos_collection.find_one({"tipoequipo": {"$regex": f'^{tipoequipo}$', "$options": "i"}, "marca": "GENERAL"})
+        preventivo = rutinas_collection.find_one({"tipo": {"$regex": f'^{tipoequipo}$', "$options": "i"}, "marca": "GENERAL"})
         if preventivo is not None:
             del preventivo['_id'], preventivo['tipoequipo'], preventivo['marca'], preventivo['modelo'], preventivo['hospital']
             return jsonify(preventivo), 200
@@ -1157,6 +1182,8 @@ def get_preventivo(tipoequipo, marca, modelo):
 @app.route('/correctivo', methods=['POST'])
 def create_correctivo():
     data = request.get_json()
+    db = client[data["codigoHospital"]]
+    rutinas = db['rutinas']
     hospital_data = usuarios_collection.find_one({"tipo": "hospital"})
     hospital = hospital_data['nombre'] if hospital_data else "Desconocido"
     rutina = {
@@ -1167,12 +1194,14 @@ def create_correctivo():
         "preguntas": data.get('preguntas', []),
         "last_updated":obtener_hora_actual(),
     }
-    correctivos_collection.insert_one(rutina)
+    rutinas.insert_one(rutina)
     return jsonify({"msg": "Rutina creada exitosamente"}), 201
 
 @app.route('/correctivo/<tipoequipo>/<marca>/<modelo>', methods=['GET'])
 def get_correctivo(tipoequipo, marca, modelo):
-    correctivo = correctivos_collection.find_one({"tipoequipo": tipoequipo, "marca": marca, "modelo": modelo})
+    db = client['GCIW']
+    rutinas_collection = db['rutinas']
+    correctivo = rutinas_collection.find_one({"tipoequipo": tipoequipo, "marca": marca, "modelo": modelo, "tipo_mantenimiento": "correctivo"})
     if correctivo is not None:
         del correctivo['_id'], correctivo['tipoequipo'], correctivo['marca'], correctivo['modelo'], correctivo['hospital']
         for pregunta in correctivo.get('preguntas', []):
@@ -1182,7 +1211,7 @@ def get_correctivo(tipoequipo, marca, modelo):
                 pregunta['opciones'] = ""  # Establece un arreglo vacío si no hay opciones
         return jsonify(correctivo), 200
     else:
-        correctivo = correctivos_collection.find_one({"tipoequipo": {"$regex": f'^{tipoequipo}$', "$options": "i"}, "marca": "GENERAL"})
+        correctivo = rutinas_collection.find_one({"tipoequipo": {"$regex": f'^{tipoequipo}$', "$options": "i"}, "marca": "GENERAL"})
         if correctivo is not None:
             del correctivo['_id'], correctivo['tipoequipo'], correctivo['marca'], correctivo['modelo'], correctivo['hospital']
             return jsonify(correctivo), 200
